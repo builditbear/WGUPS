@@ -16,9 +16,9 @@ class Package:
         self.masskg = masskg
         self.special_notes = special_notes
         #  Valid entries are, "Undefined", "Delayed", "At Depot", "In Transit", and "Delivered"
-        self.delivery_time = None
-        self.load_time = None
-        self.destination = None
+        self.delivery_time: datetime.time = None
+        self.load_time: datetime.time = None
+        self.destination: Location = None
 
     def delivery_status(self, local_time: datetime.time):
         if (self.delivery_time is None) and (self.load_time is None):
@@ -113,17 +113,33 @@ class Truck:
 
 
 class Location:
-    def __init__(self, name, addr, zipcode, distances):
+    def __init__(self, id, parent_graph, name, addr, zipcode, distances):
+        self.id = id
+        self.parent_graph = parent_graph
         self.name = name
         self.addr = addr
         self.zipcode = zipcode
         self.distance_from_hub = sys.maxsize
+        self.previous_location = None
         self.distances = []
         for distance in distances:
             if distance != '':
                 self.distances.append(distance)
             else:
                 break
+
+    def get_distance(self, dest_id):
+        # To avoid data duplication, the graph's structure mirrors that of the WGUPS Distance Table file:
+        # Each location stores only distance values for previous entries in the graph, exploiting the bidirectional
+        # nature of the data, and the fact that the distance table represents a full mesh graph.
+        if dest_id == self.id:
+            return 0
+        # If the destination is a previous entry in the graph, the distance can be found in local "edge" list.
+        if dest_id < self.id:
+            return self.distances[dest_id]
+        # If the destination is a later entry in the graph, the distance can be found in that location's list.
+        elif dest_id > self.id:
+            return self.parent_graph[dest_id].distances[self.id]
 
 
 def csv_to_manifest(csv_name):
@@ -143,18 +159,25 @@ def csv_to_graph(csv_name):
     graph = []
     with open(csv_name, newline='') as distance_table:
         reader = csv.reader(distance_table)
+        index = 0
         for entry in reader:
-            graph.append(Location(entry[0], entry[1], entry[2], entry[3:]))
+            graph.append(Location(index, graph, entry[0], entry[1], entry[2], entry[3:]))
+            index += 1
     return graph
 
 
 # def dijkstra_delivery(truck, graph):
 #     hub = graph[0]  # The starting vertex.
-#     for location in graph:
-#         location
+#     unvisited = []
+#     for pkg in truck.packing_list:
+#         unvisited.append(pkg.destination)
+#     # Distance in this context is relative to the hub.
+#     hub.distance = 0
+#     # Sort unvisited destinations by their proximity to the hub.
+#     while unvisited is not []:
+#         # Visit destination with lowest distance from hub.
 
 
-# Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     # Translate raw package and hub details into navigable data structures we can operate on.
     graph = csv_to_graph("WGUPS Distance Table.csv")
@@ -165,3 +188,5 @@ if __name__ == '__main__':
         db.insert(package)
         package.associate_destination(graph)
     db.status_report(datetime.time(3))
+    print(graph[0].get_distance(4))
+    print("Awww yeah.")
