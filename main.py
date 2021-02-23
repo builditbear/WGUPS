@@ -41,61 +41,81 @@ class PackageDB:
     def __init__(self, number_of_packages):  # O(1)
         self.db_size = number_of_packages * 2
         self.db = [None] * self.db_size
+        # load factor = number of elements / db_size
+        self.load_factor: float = 0
 
-    def get_size(self):
-        return self.db_size
+    def __hashfunk(self, id):
+        return (id - 1) % self.db_size
+
+    # Generates subset of db containing all packages for use in delivery truck.
+    # Allows us to keep track of what packages have been delivered without altering
+    # db structure itself.
+    def generate_manifest(self):
+        return filter(lambda pkg: True if pkg is not None else False, self.db)
 
     def status_report(self, local_time: datetime.time):
-        for package in self.db:
-            if package is not None:
-                print(package.delivery_status(local_time))
+        for pkg in self.db:
+            if pkg is not None:
+                print(pkg.delivery_status(local_time))
 
-    def __expand_and_rehash(self):
-        self.db.append([None] * self.db_size)  # Expands table by factor of two to accommodate new packages.
-        self.db_size = self.db_size * 2
-        for package_index in range(len(self.db)):
-            if self.db[package_index] is not None:
-                package = self.db.pop(package_index)  # Remove the package before replacing it at new hash index.
-                self.insert(package)
+    # After load factor exceeds .5 for the first time, it should be between 1/4 and 1/2 at any given time.
+    def __maintain_load_factor(self):
+        self.load_factor = sum(i is not None for i in self.db) / self.db_size
+        if self.load_factor > .5:
+            self.db.append([None] * self.db_size)  # Expands table by factor of two to accommodate new packages.
+            self.db_size = self.db_size * 2
+            for i in range(len(self.db)):
+                if self.db[i] is not None:
+                    pkg = self.db.pop(i)  # Remove the package before replacing it at new hash index.
+                    self.insert(pkg)
 
     # Takes a list with ordered values listed in Package init method, or a Package object.
+    # Assumes that there is always an empty spot/tombstone in db: Db will resize itself to maintain optimal load factor.
     def insert(self, package_details):
         if type(package_details) is list:
-            package = Package(*package_details)
+            pkg = Package(*package_details)
         elif type(package_details) is Package:
-            package = package_details
+            pkg = package_details
         else:
             print("Invalid type for insertion into package database.")
             return
-
-        index = (package.id - 1) % self.db_size
-        if self.db[index] is None:
-            self.db[index] = package
-        else:
-            starting_point = index
-            index = (index + 1) % self.db_size  # Iteratively look at the next slot until an open slot it found.
-            while index != starting_point:
-                if self.db[index] is None:
-                    self.db[index] = package
-                    return
-                index = (index + 1) % self.db_size
-            self.__expand_and_rehash()  # If an empty spot isn't available we can expand the db before trying again!
-            self.insert(package)
+        # Iteratively look at the next slot until an open slot or tombstone is found.
+        for i in range(self.db_size):
+            key = self.__hashfunk(pkg.id + i)
+            if self.db[i] is None or self.db[i] == "tombstone":
+                self.db[i] = pkg
+                self.__maintain_load_factor()
+                return
+        print("Error: The entire hash table was searched, but no empty slot was found.")
+        print("Please inspect load factor expansion logic.")
 
     def search(self, id):
-        for package in self.db:
-            if (package is not None) and (package.id == id):
-                return package
+        # Iteratively look at buckets until desired pkg or empty slot is found.
+        # If everything is hashed uniquely, O(1) runtime.
+        for i in range(self.db_size):
+            key = self.__hashfunk(id + i)
+            pkg = self.db[key]
+            if pkg is None:
+                print("Package id " + str(id) + " not found in database.")
+                return
+            elif pkg is not None and pkg != "tombstone" and pkg.id == id:
+                return pkg
+        # If execution reaches here, we've checked every possible hash key possible.
+        print("Package id " + str(id) + " was not found in database.")
 
     def remove(self, id):
-        for package in self.db:
-            if package is not None:
-                if package.id == id:
-                    self.db.remove(package)
-                    return
-        else:
-            print("The given package ID is not in this database.")
-            return
+        # Similar behavior to search, but bucket's contents are replaced with a tombstone
+        # when the desired package is found.
+        for i in range(self.db_size):
+            key = self.__hashfunk(id + i)
+            pkg = self.db[key]
+            if pkg is None:
+                print("Package id " + str(id) + " not found in database.")
+                return
+            elif pkg is not None and pkg != "tombstone" and pkg.id == id:
+                self.db[key] = "tombstone"
+        # If execution reaches here, we've checked every possible hash key possible.
+        print("Package id " + str(id) + " was not found in database.")
 
 
 class Truck:
@@ -104,12 +124,15 @@ class Truck:
         self.capacity = capacity
         self.packing_list = []
 
-    def load(self, load_time, delivery_list: list, package_db: PackageDB):
-        for id in delivery_list:
-            if len(self.packing_list) < self.capacity and delivery_list:
-                pkg = package_db.search(delivery_list.pop(id))
-                pkg.update_load_time(load_time)
-                self.packing_list.append(pkg)
+    # Need to update this once Dijstra is working with logic for handling special notes & deadlines.
+    def load(self, load_time, manifest):
+        for pkg in manifest:
+            # Provided we have not exceeded capacity, and manifest isn't empty,
+            # remove the next pkg from manifest, update it's load time, and "load" onto truck.
+            if len(self.packing_list) < self.capacity and manifest:
+                current_pkg = manifest.pop(pkg)
+                current_pkg.update_load_time(load_time)
+                self.packing_list.append(current_pkg)
 
 
 class Location:
@@ -128,18 +151,18 @@ class Location:
             else:
                 break
 
-    def get_distance(self, dest_id):
+    def get_distance(self, origin):
         # To avoid data duplication, the graph's structure mirrors that of the WGUPS Distance Table file:
         # Each location stores only distance values for previous entries in the graph, exploiting the bidirectional
         # nature of the data, and the fact that the distance table represents a full mesh graph.
-        if dest_id == self.id:
+        if origin == self.id:
             return 0
         # If the destination is a previous entry in the graph, the distance can be found in local "edge" list.
-        if dest_id < self.id:
-            return self.distances[dest_id]
+        if origin < self.id:
+            return self.distances[origin]
         # If the destination is a later entry in the graph, the distance can be found in that location's list.
-        elif dest_id > self.id:
-            return self.parent_graph[dest_id].distances[self.id]
+        elif origin > self.id:
+            return self.parent_graph[origin].distances[self.id]
 
 
 def csv_to_manifest(csv_name):
@@ -166,16 +189,28 @@ def csv_to_graph(csv_name):
     return graph
 
 
-# def dijkstra_delivery(truck, graph):
-#     hub = graph[0]  # The starting vertex.
-#     unvisited = []
-#     for pkg in truck.packing_list:
-#         unvisited.append(pkg.destination)
-#     # Distance in this context is relative to the hub.
-#     hub.distance = 0
-#     # Sort unvisited destinations by their proximity to the hub.
-#     while unvisited is not []:
-#         # Visit destination with lowest distance from hub.
+def dijkstra_delivery(truck, graph):
+    hub = graph[0]  # The starting vertex.
+    unvisited = []
+    for pkg in truck.packing_list:
+        unvisited.append(pkg.destination)
+    # Distance in this context is relative to the hub.
+    hub.distance = 0
+    # Sort unvisited destinations by their proximity to the hub.
+    print(unvisited)
+    sort_by_dist_ascending(unvisited, hub)
+    print(unvisited)
+    # while unvisited is not []:
+
+
+def sort_by_dist_ascending(locations, origin):
+    for i in range(1, len(locations)):
+        for j in range(i, 0, -1):
+            if locations[j-1].get_distance(origin) > locations[j].get_distance(origin):
+                # Swap indices of locations.
+                temp = locations[j-1]
+                locations[j-1] = locations[j]
+                locations[j] = temp
 
 
 if __name__ == '__main__':
@@ -188,5 +223,4 @@ if __name__ == '__main__':
         db.insert(package)
         package.associate_destination(graph)
     db.status_report(datetime.time(3))
-    print(graph[0].get_distance(4))
-    print("Awww yeah.")
+    t1 = Truck()
