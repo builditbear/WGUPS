@@ -1,5 +1,10 @@
 # WGUPS Delivery Optimization Apparatus V1 - by Brandon Chavez, C950
+# Output: Total mileage travelled by all trucks for this particular delivery solution.
 # Future Fix Log:
+# 1. Ensure that hash table is being utilized efficiently.
+# 2. Finish Dijkstra Algorithm (just need to link package_id to location somehow in loop).
+# 3. Write logic to make timestamps for and update delivery/load time for pkgs.
+# 4. Write simple interface to check package status at given time.
 import csv
 import datetime
 import sys
@@ -119,10 +124,13 @@ class PackageDB:
 
 
 class Truck:
-    def __init__(self, avg_speed=18, capacity=16):
+    def __init__(self, avg_speed=18, capacity=16, mileage=0, db):
         self.avg_speed = avg_speed
         self.capacity = capacity
-        self.packing_list = []
+        # In this scenario, WGUPS is so wealthy that their trucks are brand new - 0 mileage!
+        self.mileage = mileage
+        self.db: PackageDB = db
+        self.delivery_list = []
 
     # Need to update this once Dijstra is working with logic for handling special notes & deadlines.
     def load(self, load_time, manifest):
@@ -134,6 +142,11 @@ class Truck:
                 current_pkg.update_load_time(load_time)
                 self.packing_list.append(current_pkg)
 
+    def deliver(self, delivery_time, pkg_id):
+        pkg = self.db.search(pkg_id)
+        self.delivery_list.remove(pkg)
+        pkg.delivery_time = delivery_time
+
 
 class Location:
     def __init__(self, id, parent_graph, name, addr, zipcode, distances):
@@ -142,7 +155,7 @@ class Location:
         self.name = name
         self.addr = addr
         self.zipcode = zipcode
-        self.distance_from_hub = sys.maxsize
+        self.shortest_known_path = sys.maxsize
         self.previous_location = None
         self.distances = []
         for distance in distances:
@@ -151,18 +164,18 @@ class Location:
             else:
                 break
 
-    def get_distance(self, origin):
+    def get_distance_to(self, location_id: int):
         # To avoid data duplication, the graph's structure mirrors that of the WGUPS Distance Table file:
         # Each location stores only distance values for previous entries in the graph, exploiting the bidirectional
         # nature of the data, and the fact that the distance table represents a full mesh graph.
-        if origin == self.id:
+        if location_id == self.id:
             return 0
         # If the destination is a previous entry in the graph, the distance can be found in local "edge" list.
-        if origin < self.id:
-            return self.distances[origin]
+        if location_id < self.id:
+            return self.distances[location_id]
         # If the destination is a later entry in the graph, the distance can be found in that location's list.
-        elif origin > self.id:
-            return self.parent_graph[origin].distances[self.id]
+        elif location_id > self.id:
+            return self.parent_graph[location_id].distances[self.id]
 
 
 def csv_to_manifest(csv_name):
@@ -189,20 +202,32 @@ def csv_to_graph(csv_name):
     return graph
 
 
-def dijkstra_delivery(truck, graph):
-    hub = graph[0]  # The starting vertex.
-    unvisited = []
+def dijkstra_delivery(truck, graph, start_loc_id=0):
+    # start has 0 dist from itself, and will be the first location to be visited.
+    start_location = graph[start_loc_id]
+    start_location.shortest_known_path = 0
+    unvisited = [start_location]
+    # Extract other destinations from packages onboard the truck.
     for pkg in truck.packing_list:
         unvisited.append(pkg.destination)
-    # Distance in this context is relative to the hub.
-    hub.distance = 0
-    # Sort unvisited destinations by their proximity to the hub.
-    print(unvisited)
-    sort_by_dist_ascending(unvisited, hub)
-    print(unvisited)
-    # while unvisited is not []:
+    # Sort unvisited destinations by their proximity to the start location.
+    sort_by_dist_ascending(unvisited, start_location)
+    while unvisited is not []:
+        # Visit closest destination (the start location itself is visited first).
+        current_location = unvisited.pop(0)
+        for location in unvisited:
+            distance = current_location.get_distance_to(location.id)
+            alt_path = current_location.shortest_known_path + distance
+            if alt_path < location.shortest_known_path:
+                location.shortest_known_path = alt_path
+                location.previous_location = current_location
+        # Account for mileage accrued by delivering to this location.
+        # Will later insert logic to calculate and update pkg delivery time here.
+        # I need a delivery time and a package_id.
+        truck.mileage += current_location.shortest_known_path
 
 
+# Based on insertion sort algorithm.
 def sort_by_dist_ascending(locations, origin):
     for i in range(1, len(locations)):
         for j in range(i, 0, -1):
