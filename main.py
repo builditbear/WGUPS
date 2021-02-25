@@ -2,13 +2,13 @@
 # Output: Total mileage travelled by all trucks for this particular delivery solution.
 # Future Fix Log:
 # 1. Ensure that hash table is being utilized efficiently.
-# 2. Finish Dijkstra Algorithm (just need to link package_id to location somehow in loop).
-# 3. Write logic to make timestamps for and update delivery/load time for pkgs.
-# 4. Write simple interface to check package status at given time.
+# 2. Write simple interface to check package status at given time.
+# 3. Add load logic to accommodate packages with special notes.
 import csv
 import datetime
 import sys
 
+day_start_time = datetime.datetime(2021,3,1,8)
 
 class Package:
     def __init__(self, id, address, city, state, zipcode, delivery_deadline, masskg, special_notes):
@@ -26,12 +26,12 @@ class Package:
         self.destination: Location = None
 
     def delivery_status(self, local_time: datetime.time):
-        if (self.delivery_time is None) and (self.load_time is None):
+        if self.delivery_time is not None and self.load_time is not None:
             return "Package #" + str(self.id) + " is currently at the hub."
-        elif local_time >= self.delivery_time:
-            return "Package #" + str(self.id) + " was delivered at " + self.delivery_time + "."
+        elif self.delivery_time is not None and local_time >= self.delivery_time:
+            return "Package #" + str(self.id) + " was delivered at " + print(self.delivery_time) + "."
         elif local_time >= self.load_time:
-            return "Package #" + str(self.id) + " is en route as of " + self.load_time
+            return "Package #" + str(self.id) + " is en route as of " + print(self.load_time)
 
     # Link this package to its location in our graph via object pointer.
     def associate_destination(self, graph):
@@ -133,16 +133,16 @@ class Truck:
         self.delivery_list = []
 
     # Need to update this once Dijstra is working with logic for handling special notes & deadlines.
-    def load(self, load_time, manifest):
+    def load(self, load_time: datetime.datetime, manifest):
         for pkg in manifest:
             # Provided we have not exceeded capacity, and manifest isn't empty,
             # remove the next pkg from manifest, update it's load time, and "load" onto truck.
-            if len(self.packing_list) < self.capacity and manifest:
+            if len(self.delivery_list) < self.capacity and manifest:
                 current_pkg = manifest.pop(pkg)
                 current_pkg.update_load_time(load_time)
-                self.packing_list.append(current_pkg)
+                self.delivery_list.append(current_pkg)
 
-    def deliver(self, delivery_time, pkg_id):
+    def deliver(self, delivery_time: datetime.datetime, pkg_id):
         pkg = self.db.search(pkg_id)
         self.delivery_list.remove(pkg)
         pkg.delivery_time = delivery_time
@@ -202,14 +202,16 @@ def csv_to_graph(csv_name):
     return graph
 
 
-def dijkstra_delivery(truck, graph, start_loc_id=0):
+def dijkstra_delivery(truck: Truck, graph, start_loc_id=0):
     # start has 0 dist from itself, and will be the first location to be visited.
     start_location = graph[start_loc_id]
     start_location.shortest_known_path = 0
     unvisited = [start_location]
     # Extract other destinations from packages onboard the truck.
-    for pkg in truck.packing_list:
-        unvisited.append(pkg.destination)
+    for pkg in truck.delivery_list:
+        # Prevents duplicate destinations - some packages will be to the same place.
+        if pkg.destination not in unvisited:
+            unvisited.append(pkg.destination)
     # Sort unvisited destinations by their proximity to the start location.
     sort_by_dist_ascending(unvisited, start_location)
     while unvisited is not []:
@@ -222,9 +224,16 @@ def dijkstra_delivery(truck, graph, start_loc_id=0):
                 location.shortest_known_path = alt_path
                 location.previous_location = current_location
         # Account for mileage accrued by delivering to this location.
-        # Will later insert logic to calculate and update pkg delivery time here.
-        # I need a delivery time and a package_id.
+        # Mark pkg as delivered by updating delivery timestamp.
         truck.mileage += current_location.shortest_known_path
+        for pkg in truck.delivery_list:
+            if current_location is pkg.destination:
+                truck.deliver(current_time(truck),pkg.id)
+
+# Calculates time of day for a given truck based on how far it has travelled at that point in time.
+def current_time(truck: Truck) -> datetime.datetime:
+    time_since_day_start = datetime.timedelta(hours=truck.mileage / truck.avg_speed)
+    return day_start_time + time_since_day_start
 
 
 # Based on insertion sort algorithm.
@@ -242,7 +251,6 @@ if __name__ == '__main__':
     # Translate raw package and hub details into navigable data structures we can operate on.
     graph = csv_to_graph("WGUPS Distance Table.csv")
     manifest = csv_to_manifest("WGUPS Package File.csv")
-
     db = PackageDB(len(manifest))
     for package in manifest:
         db.insert(package)
