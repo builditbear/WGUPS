@@ -26,9 +26,10 @@ class Package:
         self.destination: Location = None
 
     def delivery_status(self, local_time: datetime.time):
-        if self.delivery_time is not None and self.load_time is not None:
+        # If delivery/load times are unpopulated, or the current_time precedes the load_time, must be at hub.
+        if (not self.delivery_time or self.load_time) or (local_time < self.load_time):
             return "Package #" + str(self.id) + " is currently at the hub."
-        elif self.delivery_time is not None and local_time >= self.delivery_time:
+        elif local_time >= self.delivery_time:
             return "Package #" + str(self.id) + " was delivered at " + print(self.delivery_time) + "."
         elif local_time >= self.load_time:
             return "Package #" + str(self.id) + " is en route as of " + print(self.load_time)
@@ -124,7 +125,7 @@ class PackageDB:
 
 
 class Truck:
-    def __init__(self, avg_speed=18, capacity=16, mileage=0, db):
+    def __init__(self, db, avg_speed=18, capacity=16, mileage=0):
         self.avg_speed = avg_speed
         self.capacity = capacity
         # In this scenario, WGUPS is so wealthy that their trucks are brand new - 0 mileage!
@@ -132,20 +133,25 @@ class Truck:
         self.db: PackageDB = db
         self.delivery_list = []
 
-    # Need to update this once Dijstra is working with logic for handling special notes & deadlines.
-    def load(self, load_time: datetime.datetime, manifest):
+    # Calculates time of day for a given truck based on how far it has travelled at that point in time.
+    def __current_time(self) -> datetime.datetime:
+        time_since_day_start = datetime.timedelta(hours=self.mileage / self.avg_speed)
+        return day_start_time + time_since_day_start
+
+    # Need to update this once Dijkstra is working with logic for handling special notes & deadlines.
+    def load(self, manifest):
         for pkg in manifest:
             # Provided we have not exceeded capacity, and manifest isn't empty,
             # remove the next pkg from manifest, update it's load time, and "load" onto truck.
-            if len(self.delivery_list) < self.capacity and manifest:
-                current_pkg = manifest.pop(pkg)
-                current_pkg.update_load_time(load_time)
+            if (len(self.delivery_list) < self.capacity) and manifest:
+                current_pkg = manifest.pop(0)
+                current_pkg.load_time = self.__current_time()
                 self.delivery_list.append(current_pkg)
 
-    def deliver(self, delivery_time: datetime.datetime, pkg_id):
+    def deliver(self, pkg_id):
         pkg = self.db.search(pkg_id)
         self.delivery_list.remove(pkg)
-        pkg.delivery_time = delivery_time
+        pkg.delivery_time = self.__current_time()
 
 
 class Location:
@@ -230,11 +236,6 @@ def dijkstra_delivery(truck: Truck, graph, start_loc_id=0):
             if current_location is pkg.destination:
                 truck.deliver(current_time(truck),pkg.id)
 
-# Calculates time of day for a given truck based on how far it has travelled at that point in time.
-def current_time(truck: Truck) -> datetime.datetime:
-    time_since_day_start = datetime.timedelta(hours=truck.mileage / truck.avg_speed)
-    return day_start_time + time_since_day_start
-
 
 # Based on insertion sort algorithm.
 def sort_by_dist_ascending(locations, origin):
@@ -255,5 +256,7 @@ if __name__ == '__main__':
     for package in manifest:
         db.insert(package)
         package.associate_destination(graph)
-    db.status_report(datetime.time(3))
-    t1 = Truck()
+    t1 = Truck(db)
+    t1.load(manifest)
+    dijkstra_delivery(t1, graph)
+    print("Finished delivery algorithm for first 6 packages.")
