@@ -4,11 +4,13 @@
 # 1. Ensure that hash table is being utilized efficiently.
 # 2. Write simple interface to check package status at given time.
 # 3. Add load logic to accommodate packages with special notes.
+# 4. Troubleshoot Dijkstra Algorithm.
 import csv
 import datetime
 import sys
 
-day_start_time = datetime.datetime(2021,3,1,8)
+start_time = datetime.time(hour=8)
+start_time_date = datetime.datetime.combine(datetime.date.today(), start_time)
 
 class Package:
     def __init__(self, id, address, city, state, zipcode, delivery_deadline, masskg, special_notes):
@@ -27,12 +29,12 @@ class Package:
 
     def delivery_status(self, local_time: datetime.time):
         # If delivery/load times are unpopulated, or the current_time precedes the load_time, must be at hub.
-        if (not self.delivery_time or self.load_time) or (local_time < self.load_time):
+        if (not (self.delivery_time or self.load_time)) or (local_time < self.load_time):
             return "Package #" + str(self.id) + " is currently at the hub."
-        elif local_time >= self.delivery_time:
-            return "Package #" + str(self.id) + " was delivered at " + print(self.delivery_time) + "."
+        elif self.delivery_time is not None and local_time >= self.delivery_time:
+            return "Package #" + str(self.id) + " was delivered at " + self.delivery_time.strftime("%I:%M") + "."
         elif local_time >= self.load_time:
-            return "Package #" + str(self.id) + " is en route as of " + print(self.load_time)
+            return "Package #" + str(self.id) + " is en route as of " + self.load_time.strftime("%I:%M") + "."
 
     # Link this package to its location in our graph via object pointer.
     def associate_destination(self, graph):
@@ -136,7 +138,7 @@ class Truck:
     # Calculates time of day for a given truck based on how far it has travelled at that point in time.
     def __current_time(self) -> datetime.datetime:
         time_since_day_start = datetime.timedelta(hours=self.mileage / self.avg_speed)
-        return day_start_time + time_since_day_start
+        return start_time_date + time_since_day_start
 
     # Need to update this once Dijkstra is working with logic for handling special notes & deadlines.
     def load(self, manifest):
@@ -156,7 +158,7 @@ class Truck:
 
 class Location:
     def __init__(self, id, parent_graph, name, addr, zipcode, distances):
-        self.id = id
+        self.id = int(id)
         self.parent_graph = parent_graph
         self.name = name
         self.addr = addr
@@ -203,7 +205,10 @@ def csv_to_graph(csv_name):
         reader = csv.reader(distance_table)
         index = 0
         for entry in reader:
-            graph.append(Location(index, graph, entry[0], entry[1], entry[2], entry[3:]))
+            distances = []
+            for dist in entry[3:]:
+                    distances.append(float(dist))
+            graph.append(Location(index, graph, entry[0], entry[1], entry[2], distances))
             index += 1
     return graph
 
@@ -238,10 +243,10 @@ def dijkstra_delivery(truck: Truck, graph, start_loc_id=0):
 
 
 # Based on insertion sort algorithm.
-def sort_by_dist_ascending(locations, origin):
+def sort_by_dist_ascending(locations, origin: Location):
     for i in range(1, len(locations)):
         for j in range(i, 0, -1):
-            if locations[j-1].get_distance(origin) > locations[j].get_distance(origin):
+            if locations[j-1].get_distance_to(origin.id) > locations[j].get_distance_to(origin.id):
                 # Swap indices of locations.
                 temp = locations[j-1]
                 locations[j-1] = locations[j]
@@ -258,5 +263,8 @@ if __name__ == '__main__':
         package.associate_destination(graph)
     t1 = Truck(db)
     t1.load(manifest)
+    # query_time = datetime.datetime.combine(datetime.date.today(),
+    #                                        datetime.datetime.strptime(input("Please enter a time to query pkg status.\n"),
+    #                                        "%H:%M").time())
     dijkstra_delivery(t1, graph)
     print("Finished delivery algorithm for first 6 packages.")
