@@ -142,16 +142,14 @@ class Truck:
 
     # Need to update this once Dijkstra is working with logic for handling special notes & deadlines.
     def load(self, manifest):
-        for pkg in manifest:
-            # Provided we have not exceeded capacity, and manifest isn't empty,
-            # remove the next pkg from manifest, update it's load time, and "load" onto truck.
-            if (len(self.delivery_list) < self.capacity) and manifest:
-                current_pkg = manifest.pop(0)
-                current_pkg.load_time = self.__current_time()
-                self.delivery_list.append(current_pkg)
+        # Provided we have not exceeded capacity, and manifest isn't empty,
+        # remove the next pkg from manifest, update it's load time, and "load" onto truck.
+        while (len(self.delivery_list) < self.capacity) and manifest:
+            current_pkg = manifest.pop(0)
+            current_pkg.load_time = self.__current_time()
+            self.delivery_list.append(current_pkg)
 
-    def deliver(self, pkg_id):
-        pkg = self.db.search(pkg_id)
+    def deliver(self, pkg):
         self.delivery_list.remove(pkg)
         pkg.delivery_time = self.__current_time()
 
@@ -207,6 +205,9 @@ def csv_to_graph(csv_name):
         for entry in reader:
             distances = []
             for dist in entry[3:]:
+                if dist is '':
+                    break
+                else:
                     distances.append(float(dist))
             graph.append(Location(index, graph, entry[0], entry[1], entry[2], distances))
             index += 1
@@ -239,7 +240,7 @@ def dijkstra_delivery(truck: Truck, graph, start_loc_id=0):
         truck.mileage += current_location.shortest_known_path
         for pkg in truck.delivery_list:
             if current_location is pkg.destination:
-                truck.deliver(current_time(truck),pkg.id)
+                truck.deliver(pkg)
 
 
 # Based on insertion sort algorithm.
