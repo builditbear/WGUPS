@@ -4,13 +4,13 @@
 # 1. Ensure that hash table is being utilized efficiently.
 # 2. Write simple interface to check package status at given time.
 # 3. Add load logic to accommodate packages with special notes.
-# 4. Troubleshoot Dijkstra Algorithm.
 import csv
 import datetime
 import sys
 
 start_time = datetime.time(hour=8)
 start_time_date = datetime.datetime.combine(datetime.date.today(), start_time)
+
 
 class Package:
     def __init__(self, id, address, city, state, zipcode, delivery_deadline, masskg, special_notes):
@@ -23,11 +23,11 @@ class Package:
         self.masskg = masskg
         self.special_notes = special_notes
         #  Valid entries are, "Undefined", "Delayed", "At Depot", "In Transit", and "Delivered"
-        self.delivery_time: datetime.time = None
-        self.load_time: datetime.time = None
+        self.delivery_time: datetime.datetime = None
+        self.load_time: datetime.datetime = None
         self.destination: Location = None
 
-    def delivery_status(self, local_time: datetime.time):
+    def status(self, local_time: datetime.datetime):
         # If delivery/load times are unpopulated, or the current_time precedes the load_time, must be at hub.
         if (not (self.delivery_time or self.load_time)) or (local_time < self.load_time):
             return "Package #" + str(self.id) + " is currently at the hub."
@@ -61,10 +61,10 @@ class PackageDB:
     def generate_manifest(self):
         return filter(lambda pkg: True if pkg is not None else False, self.db)
 
-    def status_report(self, local_time: datetime.time):
+    def status_report(self, local_time: datetime.datetime):
         for pkg in self.db:
             if pkg is not None:
-                print(pkg.delivery_status(local_time))
+                print(pkg.status(local_time))
 
     # After load factor exceeds .5 for the first time, it should be between 1/4 and 1/2 at any given time.
     def __maintain_load_factor(self):
@@ -141,13 +141,17 @@ class Truck:
         return start_time_date + time_since_day_start
 
     # Need to update this once Dijkstra is working with logic for handling special notes & deadlines.
-    def load(self, manifest):
+    # Optional arg "load_cap" can be used to load only up to a certain number of packages at once
+    # (provided there are packages available to load and that the truck itself is not already full).
+    def load(self, manifest, load_cap=sys.maxsize):
         # Provided we have not exceeded capacity, and manifest isn't empty,
         # remove the next pkg from manifest, update it's load time, and "load" onto truck.
-        while (len(self.delivery_list) < self.capacity) and manifest:
+        counter = 0
+        while (len(self.delivery_list) < self.capacity) and manifest and counter < load_cap:
             current_pkg = manifest.pop(0)
             current_pkg.load_time = self.__current_time()
             self.delivery_list.append(current_pkg)
+            counter += 1
 
     def deliver(self, pkg):
         self.delivery_list.remove(pkg)
@@ -183,6 +187,10 @@ class Location:
         elif location_id > self.id:
             return self.parent_graph[location_id].distances[self.id]
 
+    def reset_path(self):
+        self.shortest_known_path = sys.maxsize
+        self.previous_location = None
+
 
 def csv_to_manifest(csv_name):
     manifest = []
@@ -205,7 +213,7 @@ def csv_to_graph(csv_name):
         for entry in reader:
             distances = []
             for dist in entry[3:]:
-                if dist is '':
+                if not dist:
                     break
                 else:
                     distances.append(float(dist))
@@ -214,7 +222,22 @@ def csv_to_graph(csv_name):
     return graph
 
 
-def dijkstra_delivery(truck: Truck, graph, start_loc_id=0):
+# Traces path of given location back to the origin location, and stores path (in order of first to last location
+# visited) in the empty list passed in.
+def trace_path(loc: Location, path: list):
+    path.append(loc)
+    # Now, if there is a previous location, it should be asked to add itself to the path (recursive step)
+    if loc.previous_location:
+        trace_path(loc.previous_location, path)
+    # If there isn't, we have reached the origin, and we should reverse the list so it reads
+    # from startpoint to endpoint.
+    else:
+        path.reverse()
+
+
+# This needs to be modified to consider the shortest path to a location via *any and all* locations
+# in the graph - right now, it only considers routes passing through locations on the delivery list.
+def dijkstra_shortest_path(truck: Truck, graph, start_loc_id):
     # start has 0 dist from itself, and will be the first location to be visited.
     start_location = graph[start_loc_id]
     start_location.shortest_known_path = 0
@@ -226,21 +249,27 @@ def dijkstra_delivery(truck: Truck, graph, start_loc_id=0):
             unvisited.append(pkg.destination)
     # Sort unvisited destinations by their proximity to the start location.
     sort_by_dist_ascending(unvisited, start_location)
-    while unvisited is not []:
+    visited = []
+    while unvisited:
         # Visit closest destination (the start location itself is visited first).
         current_location = unvisited.pop(0)
+        visited.append(current_location)
         for location in unvisited:
             distance = current_location.get_distance_to(location.id)
             alt_path = current_location.shortest_known_path + distance
             if alt_path < location.shortest_known_path:
                 location.shortest_known_path = alt_path
                 location.previous_location = current_location
-        # Account for mileage accrued by delivering to this location.
-        # Mark pkg as delivered by updating delivery timestamp.
-        truck.mileage += current_location.shortest_known_path
-        for pkg in truck.delivery_list:
-            if current_location is pkg.destination:
-                truck.deliver(pkg)
+    for loc in visited:
+        print("The shortest known path to " + loc.name + " from " + start_location.name + " is "
+              + str(loc.shortest_known_path) + " miles.")
+        path = []
+        trace_path(loc, path)
+        for i in range(len(path)):
+            if i == (len(path) - 1):
+                print(path[i].name)
+            else:
+                print(path[i].name + " --> ", end='')
 
 
 # Based on insertion sort algorithm.
@@ -264,8 +293,4 @@ if __name__ == '__main__':
         package.associate_destination(graph)
     t1 = Truck(db)
     t1.load(manifest)
-    # query_time = datetime.datetime.combine(datetime.date.today(),
-    #                                        datetime.datetime.strptime(input("Please enter a time to query pkg status.\n"),
-    #                                        "%H:%M").time())
-    dijkstra_delivery(t1, graph)
-    print("Finished delivery algorithm for first 6 packages.")
+    dijkstra_shortest_path(t1,graph,0)
