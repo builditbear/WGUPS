@@ -161,7 +161,8 @@ class Location:
 
 
 class Truck:
-    def __init__(self, db, location: Location, avg_speed=18, capacity=16, mileage=0):
+    def __init__(self, db, id, location: Location, avg_speed=18, capacity=16, mileage=0):
+        self.id = id
         self.avg_speed = avg_speed
         self.capacity = capacity
         # In this scenario, WGUPS is so wealthy that their trucks are brand new - 0 mileage!
@@ -189,7 +190,7 @@ class Truck:
             counter += 1
 
     def deliver(self, pkg):
-        self.delivery_list.remove(pkg)
+        # self.delivery_list.remove(pkg)
         pkg.delivery_time = self.__current_time()
 
 
@@ -258,13 +259,13 @@ def sort_by_dist_ascending(locations, origin: Location):
 
 
 def dijkstra_sp(g: list, start_loc_id, dest_id):
-    # start has 0 dist from itself, and will be the first location to be visited.
-    g[start_loc_id].shortest_known_path = 0
     unvisited = []
     # Extract all locations from graph and enqueue to be visited, then sort by proximity to start location.
     for loc in g:
         loc.reset_path()
         unvisited.append(loc)
+    # start has 0 dist from itself, and will be the first location to be visited.
+    g[start_loc_id].shortest_known_path = 0
     sort_by_dist_ascending(unvisited, g[start_loc_id])
     while unvisited:
         # Visit closest destination until we have reached the destination specified by dest_id.
@@ -288,19 +289,32 @@ def deliver_packages(t: Truck, g: list):
     for pkg in t.delivery_list:
         if pkg.destination not in destinations:
             destinations.append(pkg.destination)
-    for destination in destinations:
-        dijkstra_sp(g, t.location.id, destination.id)
-    destinations.sort(key=lambda d: d.shortest_known_path)
     while destinations:
-        # Travel to the nearest location, update our location and mileage incurred by trip, deliver packages.
-        t.location = destinations.pop(0)
-        t.mileage += t.location.shortest_known_path
-        for pkg in t.delivery_list:
-            if pkg.destination is t.location:
-                t.deliver(pkg)
         for destination in destinations:
             dijkstra_sp(g, t.location.id, destination.id)
         destinations.sort(key=lambda d: d.shortest_known_path)
+        # Travel to the nearest location, update our location and mileage incurred by trip, deliver packages.
+        t.location = destinations.pop(0)
+        t.mileage += t.location.shortest_known_path
+        print("")
+        print("")
+        print("Truck #" + str(t.id) + " now travelling to " + t.location.name + ".")
+        print("Odometer: " + str(t.mileage))
+        print("")
+        # The following code manages to delivery the appropriate packages without editing the list in place (which
+        # causes a bug where a pkg is skipped if its predecessor is delivered) and without requiring an extra loop.
+        # Updated_delivery_list contains packages that are NOT delivered yet.
+        updated_delivery_list = []
+        for pkg in t.delivery_list:
+            if pkg.destination is t.location:
+                t.deliver(pkg)
+            else:
+                updated_delivery_list.append(pkg)
+        t.delivery_list = updated_delivery_list
+    print("All destinations have been visited.")
+    dijkstra_sp(g, t.location.id, graph[0].id)
+    print("Truck #" + str(t.id) + " returning to hub (" + graph[0].name + ").")
+    print("Odometer: " + str(t.mileage))
 
 
 if __name__ == '__main__':
@@ -313,8 +327,20 @@ if __name__ == '__main__':
     for package in manifest:
         db.insert(package)
         package.associate_destination(graph)
-    t1 = Truck(db, graph[0])
-    t2 = Truck(db, graph[0])
-    t1.load(manifest)
-    t2.load(manifest)
-    deliver_packages(t1, graph)
+    t1 = Truck(db, 1, graph[0])
+    t2 = Truck(db, 2, graph[0])
+    flag = True
+    # Alternates loading and delivering of trucks, and written in a way that prevents us from trying to load
+    # a truck if all packages have been delivered.
+    while manifest:
+        if flag:
+            t1.load(manifest)
+            deliver_packages(t1, graph)
+            flag = False
+        else:
+            t2.load(manifest)
+            deliver_packages(t2, graph)
+            flag = True
+    print("All packages successfully delivered.")
+    print("Odometers for trucks 1 and 2 read " + str(t1.mileage) + " and " + str(t2.mileage) + " respectively.")
+    print("Total miles travelled for today's deliveries: " + str(t1.mileage + t2.mileage) + ".")
