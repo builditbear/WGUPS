@@ -126,38 +126,6 @@ class PackageDB:
         print("Package id " + str(id) + " was not found in database.")
 
 
-class Truck:
-    def __init__(self, db, avg_speed=18, capacity=16, mileage=0):
-        self.avg_speed = avg_speed
-        self.capacity = capacity
-        # In this scenario, WGUPS is so wealthy that their trucks are brand new - 0 mileage!
-        self.mileage = mileage
-        self.db: PackageDB = db
-        self.delivery_list = []
-
-    # Calculates time of day for a given truck based on how far it has travelled at that point in time.
-    def __current_time(self) -> datetime.datetime:
-        time_since_day_start = datetime.timedelta(hours=self.mileage / self.avg_speed)
-        return start_time_date + time_since_day_start
-
-    # Need to update this once Dijkstra is working with logic for handling special notes & deadlines.
-    # Optional arg "load_cap" can be used to load only up to a certain number of packages at once
-    # (provided there are packages available to load and that the truck itself is not already full).
-    def load(self, manifest, load_cap=sys.maxsize):
-        # Provided we have not exceeded capacity, and manifest isn't empty,
-        # remove the next pkg from manifest, update it's load time, and "load" onto truck.
-        counter = 0
-        while (len(self.delivery_list) < self.capacity) and manifest and counter < load_cap:
-            current_pkg = manifest.pop(0)
-            current_pkg.load_time = self.__current_time()
-            self.delivery_list.append(current_pkg)
-            counter += 1
-
-    def deliver(self, pkg):
-        self.delivery_list.remove(pkg)
-        pkg.delivery_time = self.__current_time()
-
-
 class Location:
     def __init__(self, id, parent_graph, name, addr, zipcode, distances):
         self.id = int(id)
@@ -190,6 +158,39 @@ class Location:
     def reset_path(self):
         self.shortest_known_path = sys.maxsize
         self.previous_location = None
+
+
+class Truck:
+    def __init__(self, db, location: Location, avg_speed=18, capacity=16, mileage=0):
+        self.avg_speed = avg_speed
+        self.capacity = capacity
+        # In this scenario, WGUPS is so wealthy that their trucks are brand new - 0 mileage!
+        self.mileage = mileage
+        self.db: PackageDB = db
+        self.delivery_list = []
+        self.location: Location = location
+
+    # Calculates time of day for a given truck based on how far it has travelled at that point in time.
+    def __current_time(self) -> datetime.datetime:
+        time_since_day_start = datetime.timedelta(hours=self.mileage / self.avg_speed)
+        return start_time_date + time_since_day_start
+
+    # Need to update this once Dijkstra is working with logic for handling special notes & deadlines.
+    # Optional arg "load_cap" can be used to load only up to a certain number of packages at once
+    # (provided there are packages available to load and that the truck itself is not already full).
+    def load(self, manifest, load_cap=sys.maxsize):
+        # Provided we have not exceeded capacity, and manifest isn't empty,
+        # remove the next pkg from manifest, update it's load time, and "load" onto truck.
+        counter = 0
+        while (len(self.delivery_list) < self.capacity) and manifest and counter < load_cap:
+            current_pkg = manifest.pop(0)
+            current_pkg.load_time = self.__current_time()
+            self.delivery_list.append(current_pkg)
+            counter += 1
+
+    def deliver(self, pkg):
+        self.delivery_list.remove(pkg)
+        pkg.delivery_time = self.__current_time()
 
 
 def csv_to_manifest(csv_name):
@@ -235,41 +236,14 @@ def trace_path(loc: Location, path: list):
         path.reverse()
 
 
-# This needs to be modified to consider the shortest path to a location via *any and all* locations
-# in the graph - right now, it only considers routes passing through locations on the delivery list.
-def dijkstra_shortest_path(truck: Truck, graph, start_loc_id):
-    # start has 0 dist from itself, and will be the first location to be visited.
-    start_location = graph[start_loc_id]
-    start_location.shortest_known_path = 0
-    unvisited = [start_location]
-    # Extract other destinations from packages onboard the truck.
-    for pkg in truck.delivery_list:
-        # Prevents duplicate destinations - some packages will be to the same place.
-        if pkg.destination not in unvisited:
-            unvisited.append(pkg.destination)
-    # Sort unvisited destinations by their proximity to the start location.
-    sort_by_dist_ascending(unvisited, start_location)
-    visited = []
-    while unvisited:
-        # Visit closest destination (the start location itself is visited first).
-        current_location = unvisited.pop(0)
-        visited.append(current_location)
-        for location in unvisited:
-            distance = current_location.get_distance_to(location.id)
-            alt_path = current_location.shortest_known_path + distance
-            if alt_path < location.shortest_known_path:
-                location.shortest_known_path = alt_path
-                location.previous_location = current_location
-    for loc in visited:
-        print("The shortest known path to " + loc.name + " from " + start_location.name + " is "
-              + str(loc.shortest_known_path) + " miles.")
-        path = []
-        trace_path(loc, path)
-        for i in range(len(path)):
-            if i == (len(path) - 1):
-                print(path[i].name)
-            else:
-                print(path[i].name + " --> ", end='')
+def print_path(loc: Location):
+    path = []
+    trace_path(loc, path)
+    for i in range(len(path)):
+        if i == (len(path) - 1):
+            print(path[i].name)
+        else:
+            print(path[i].name + " --> ", end='')
 
 
 # Based on insertion sort algorithm.
@@ -283,14 +257,64 @@ def sort_by_dist_ascending(locations, origin: Location):
                 locations[j] = temp
 
 
+def dijkstra_sp(g: list, start_loc_id, dest_id):
+    # start has 0 dist from itself, and will be the first location to be visited.
+    g[start_loc_id].shortest_known_path = 0
+    unvisited = []
+    # Extract all locations from graph and enqueue to be visited, then sort by proximity to start location.
+    for loc in g:
+        loc.reset_path()
+        unvisited.append(loc)
+    sort_by_dist_ascending(unvisited, g[start_loc_id])
+    while unvisited:
+        # Visit closest destination until we have reached the destination specified by dest_id.
+        current_loc = unvisited.pop(0)
+        if current_loc.id == dest_id:
+            break
+        for loc in unvisited:
+            distance = current_loc.get_distance_to(loc.id)
+            alt_path = current_loc.shortest_known_path + distance
+            if alt_path < loc.shortest_known_path:
+                loc.shortest_known_path = alt_path
+                loc.previous_location = current_loc
+    print("The shortest known path to " + g[dest_id].name + " from " + g[start_loc_id].name + " is "
+          + str(g[dest_id].shortest_known_path) + " miles.")
+    print_path(g[dest_id])
+
+
+def deliver_packages(t: Truck, g: list):
+    destinations = []
+    # Determine locations we must visit, and shortest path to each from truck's current location.
+    for pkg in t.delivery_list:
+        if pkg.destination not in destinations:
+            destinations.append(pkg.destination)
+    for destination in destinations:
+        dijkstra_sp(g, t.location.id, destination.id)
+    destinations.sort(key=lambda d: d.shortest_known_path)
+    while destinations:
+        # Travel to the nearest location, update our location and mileage incurred by trip, deliver packages.
+        t.location = destinations.pop(0)
+        t.mileage += t.location.shortest_known_path
+        for pkg in t.delivery_list:
+            if pkg.destination is t.location:
+                t.deliver(pkg)
+        for destination in destinations:
+            dijkstra_sp(g, t.location.id, destination.id)
+        destinations.sort(key=lambda d: d.shortest_known_path)
+
+
 if __name__ == '__main__':
-    # Translate raw package and hub details into navigable data structures we can operate on.
+    # Translate raw package and location details into data structures we can operate on.
     graph = csv_to_graph("WGUPS Distance Table.csv")
     manifest = csv_to_manifest("WGUPS Package File.csv")
+    # PackageDB is a hash table for packages with some handy class methods and fields.
     db = PackageDB(len(manifest))
+    # Populate the db, while linking each package to it's destination for easy access.
     for package in manifest:
         db.insert(package)
         package.associate_destination(graph)
-    t1 = Truck(db)
+    t1 = Truck(db, graph[0])
+    t2 = Truck(db, graph[0])
     t1.load(manifest)
-    dijkstra_shortest_path(t1,graph,0)
+    t2.load(manifest)
+    deliver_packages(t1, graph)
