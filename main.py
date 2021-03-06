@@ -7,14 +7,17 @@
 import csv
 import datetime
 import sys
+import re
+from typing import Optional
+from typing import List
 
 start_time = datetime.time(hour=8)
 start_time_date = datetime.datetime.combine(datetime.date.today(), start_time)
 
 
 class Package:
-    def __init__(self, id, address, city, state, zipcode, delivery_deadline, masskg, special_notes):
-        self.id = int(id)  # Int type more convenient as we will perform calculations with this value.
+    def __init__(self, pkg_id, address, city, state, zipcode, delivery_deadline, masskg, special_notes):
+        self.pkg_id = int(pkg_id)  # Int type more convenient as we will perform calculations with this value.
         self.address = address
         self.delivery_deadline = delivery_deadline
         self.city = city
@@ -22,38 +25,37 @@ class Package:
         self.zipcode = zipcode
         self.masskg = masskg
         self.special_notes = special_notes
-        #  Valid entries are, "Undefined", "Delayed", "At Depot", "In Transit", and "Delivered"
-        self.delivery_time: datetime.datetime = None
-        self.load_time: datetime.datetime = None
-        self.destination: Location = None
+        self.delivery_time: Optional[datetime.datetime] = None
+        self.load_time: Optional[datetime.datetime] = None
+        self.destination: Optional[Location] = None
 
     def status(self, local_time: datetime.datetime):
         # If delivery/load times are unpopulated, or the current_time precedes the load_time, must be at hub.
         if (not (self.delivery_time or self.load_time)) or (local_time < self.load_time):
-            return "Package #" + str(self.id) + " is currently at the hub."
+            print("Package #" + str(self.pkg_id) + " is currently at the hub.")
         elif self.delivery_time is not None and local_time >= self.delivery_time:
-            return "Package #" + str(self.id) + " was delivered at " + self.delivery_time.strftime("%I:%M") + "."
+            print("Package #" + str(self.pkg_id) + " was delivered at " + self.delivery_time.strftime("%I:%M") + ".")
         elif local_time >= self.load_time:
-            return "Package #" + str(self.id) + " is en route as of " + self.load_time.strftime("%I:%M") + "."
+            print("Package #" + str(self.pkg_id) + " is en route as of " + self.load_time.strftime("%I:%M") + ".")
 
     # Link this package to its location in our graph via object pointer.
-    def associate_destination(self, graph):
-        for location in graph:
+    def associate_destination(self, g: list):
+        for location in g:
             if (self.address, self.zipcode) == (location.addr, location.zipcode):
                 self.destination = location
                 return
-        print("No match for package address found in graph for package ID " + str(self.id) + ".")
+        print("No match for package address found in graph for package ID " + str(self.pkg_id) + ".")
 
 
 class PackageDB:
     def __init__(self, number_of_packages):  # O(1)
         self.db_size = number_of_packages * 2
-        self.db = [None] * self.db_size
+        self.db: List[Package or None] = [None] * self.db_size
         # load factor = number of elements / db_size
         self.load_factor: float = 0
 
-    def __hashfunk(self, id):
-        return (id - 1) % self.db_size
+    def __hashfunc(self, pkg_id):
+        return (pkg_id - 1) % self.db_size
 
     # Generates subset of db containing all packages for use in delivery truck.
     # Allows us to keep track of what packages have been delivered without altering
@@ -61,10 +63,15 @@ class PackageDB:
     def generate_manifest(self):
         return filter(lambda pkg: True if pkg is not None else False, self.db)
 
+    def get_status(self, pkg_id, local_time: datetime.datetime):
+        pkg = self.search(pkg_id)
+        if pkg is not None:
+            pkg.status(local_time)
+
     def status_report(self, local_time: datetime.datetime):
         for pkg in self.db:
             if pkg is not None:
-                print(pkg.status(local_time))
+                self.get_status(pkg.pkg_id, local_time)
 
     # After load factor exceeds .5 for the first time, it should be between 1/4 and 1/2 at any given time.
     def __maintain_load_factor(self):
@@ -89,7 +96,6 @@ class PackageDB:
             return
         # Iteratively look at the next slot until an open slot or tombstone is found.
         for i in range(self.db_size):
-            key = self.__hashfunk(pkg.id + i)
             if self.db[i] is None or self.db[i] == "tombstone":
                 self.db[i] = pkg
                 self.__maintain_load_factor()
@@ -97,38 +103,36 @@ class PackageDB:
         print("Error: The entire hash table was searched, but no empty slot was found.")
         print("Please inspect load factor expansion logic.")
 
-    def search(self, id):
+    def search(self, pkg_id: int) -> Package:
         # Iteratively look at buckets until desired pkg or empty slot is found.
         # If everything is hashed uniquely, O(1) runtime.
         for i in range(self.db_size):
-            key = self.__hashfunk(id + i)
-            pkg = self.db[key]
+            key = self.__hashfunc(pkg_id + i)
+            pkg: Package = self.db[key]
             if pkg is None:
-                print("Package id " + str(id) + " not found in database.")
-                return
-            elif pkg is not None and pkg != "tombstone" and pkg.id == id:
+                raise KeyError("Package id " + str(pkg_id) + " not found in database.")
+            elif pkg != "tombstone" and pkg.pkg_id == pkg_id:
                 return pkg
         # If execution reaches here, we've checked every possible hash key possible.
-        print("Package id " + str(id) + " was not found in database.")
+        raise KeyError("Package id " + str(pkg_id) + " was not found in database.")
 
-    def remove(self, id):
+    def remove(self, pkg_id):
         # Similar behavior to search, but bucket's contents are replaced with a tombstone
         # when the desired package is found.
         for i in range(self.db_size):
-            key = self.__hashfunk(id + i)
+            key = self.__hashfunc(pkg_id + i)
             pkg = self.db[key]
             if pkg is None:
-                print("Package id " + str(id) + " not found in database.")
-                return
-            elif pkg is not None and pkg != "tombstone" and pkg.id == id:
+                raise KeyError("Package id " + str(id) + " not found in database.")
+            elif pkg != "tombstone" and pkg.id == id:
                 self.db[key] = "tombstone"
         # If execution reaches here, we've checked every possible hash key possible.
-        print("Package id " + str(id) + " was not found in database.")
+        raise KeyError("Package id " + str(id) + " was not found in database.")
 
 
 class Location:
-    def __init__(self, id, parent_graph, name, addr, zipcode, distances):
-        self.id = int(id)
+    def __init__(self, loc_id, parent_graph, name, addr, zipcode, distances):
+        self.loc_id = int(loc_id)
         self.parent_graph = parent_graph
         self.name = name
         self.addr = addr
@@ -146,14 +150,14 @@ class Location:
         # To avoid data duplication, the graph's structure mirrors that of the WGUPS Distance Table file:
         # Each location stores only distance values for previous entries in the graph, exploiting the bidirectional
         # nature of the data, and the fact that the distance table represents a full mesh graph.
-        if location_id == self.id:
+        if location_id == self.loc_id:
             return 0
         # If the destination is a previous entry in the graph, the distance can be found in local "edge" list.
-        if location_id < self.id:
+        if location_id < self.loc_id:
             return self.distances[location_id]
         # If the destination is a later entry in the graph, the distance can be found in that location's list.
-        elif location_id > self.id:
-            return self.parent_graph[location_id].distances[self.id]
+        elif location_id > self.loc_id:
+            return self.parent_graph[location_id].distances[self.loc_id]
 
     def reset_path(self):
         self.shortest_known_path = sys.maxsize
@@ -161,13 +165,13 @@ class Location:
 
 
 class Truck:
-    def __init__(self, db, id, location: Location, avg_speed=18, capacity=16, mileage=0):
-        self.id = id
+    def __init__(self, pkg_db, truck_id, location: Location, avg_speed=18, capacity=16, mileage=0):
+        self.truck_id = truck_id
         self.avg_speed = avg_speed
         self.capacity = capacity
         # In this scenario, WGUPS is so wealthy that their trucks are brand new - 0 mileage!
         self.mileage = mileage
-        self.db: PackageDB = db
+        self.db: PackageDB = pkg_db
         self.delivery_list = []
         self.location: Location = location
 
@@ -179,36 +183,37 @@ class Truck:
     # Need to update this once Dijkstra is working with logic for handling special notes & deadlines.
     # Optional arg "load_cap" can be used to load only up to a certain number of packages at once
     # (provided there are packages available to load and that the truck itself is not already full).
-    def load(self, manifest, load_cap=sys.maxsize):
+    def load(self, manif, load_cap=sys.maxsize):
         # Provided we have not exceeded capacity, and manifest isn't empty,
         # remove the next pkg from manifest, update it's load time, and "load" onto truck.
         counter = 0
-        while (len(self.delivery_list) < self.capacity) and manifest and counter < load_cap:
-            current_pkg = manifest.pop(0)
+        while (len(self.delivery_list) < self.capacity) and manif and counter < load_cap:
+            current_pkg = manif.pop(0)
             current_pkg.load_time = self.__current_time()
             self.delivery_list.append(current_pkg)
             counter += 1
 
-    def deliver(self, pkg):
+    def deliver(self, pkg: Package):
         # self.delivery_list.remove(pkg)
         pkg.delivery_time = self.__current_time()
+        print("Package #" + str(pkg.pkg_id) + " being delivered at " + datetime.datetime.strftime(pkg.delivery_time, "%H:%M"))
 
 
 def csv_to_manifest(csv_name):
-    manifest = []
+    manif = []
     with open(csv_name, newline='') as manifest_csv:
         reader = csv.DictReader(manifest_csv)
-        for package in reader:
-            manifest.append(Package(package["Package ID"], package["Address"], package["City"],
-                                    package["State"], package["Zip"], package["Delivery Deadline"],
-                                    package["MassKG"], package["Special Notes"]))
-    return manifest
+        for pkg in reader:
+            manif.append(Package(pkg["Package ID"], pkg["Address"], pkg["City"],
+                                 pkg["State"], pkg["Zip"], pkg["Delivery Deadline"],
+                                 pkg["MassKG"], pkg["Special Notes"]))
+    return manif
 
 
 # The first 3 columns in the csv, in order, should be name, addr, zip, followed by
 # Entries for distances to other hubs.
 def csv_to_graph(csv_name):
-    graph = []
+    g = []
     with open(csv_name, newline='') as distance_table:
         reader = csv.reader(distance_table)
         index = 0
@@ -219,9 +224,9 @@ def csv_to_graph(csv_name):
                     break
                 else:
                     distances.append(float(dist))
-            graph.append(Location(index, graph, entry[0], entry[1], entry[2], distances))
+            g.append(Location(index, g, entry[0], entry[1], entry[2], distances))
             index += 1
-    return graph
+    return g
 
 
 # Traces path of given location back to the origin location, and stores path (in order of first to last location
@@ -251,7 +256,7 @@ def print_path(loc: Location):
 def sort_by_dist_ascending(locations, origin: Location):
     for i in range(1, len(locations)):
         for j in range(i, 0, -1):
-            if locations[j-1].get_distance_to(origin.id) > locations[j].get_distance_to(origin.id):
+            if locations[j-1].get_distance_to(origin.loc_id) > locations[j].get_distance_to(origin.loc_id):
                 # Swap indices of locations.
                 temp = locations[j-1]
                 locations[j-1] = locations[j]
@@ -270,10 +275,10 @@ def dijkstra_sp(g: list, start_loc_id, dest_id):
     while unvisited:
         # Visit closest destination until we have reached the destination specified by dest_id.
         current_loc = unvisited.pop(0)
-        if current_loc.id == dest_id:
+        if current_loc.loc_id == dest_id:
             break
         for loc in unvisited:
-            distance = current_loc.get_distance_to(loc.id)
+            distance = current_loc.get_distance_to(loc.loc_id)
             alt_path = current_loc.shortest_known_path + distance
             if alt_path < loc.shortest_known_path:
                 loc.shortest_known_path = alt_path
@@ -291,14 +296,14 @@ def deliver_packages(t: Truck, g: list):
             destinations.append(pkg.destination)
     while destinations:
         for destination in destinations:
-            dijkstra_sp(g, t.location.id, destination.id)
+            dijkstra_sp(g, t.location.loc_id, destination.loc_id)
         destinations.sort(key=lambda d: d.shortest_known_path)
         # Travel to the nearest location, update our location and mileage incurred by trip, deliver packages.
         t.location = destinations.pop(0)
         t.mileage += t.location.shortest_known_path
         print("")
         print("")
-        print("Truck #" + str(t.id) + " now travelling to " + t.location.name + ".")
+        print("Truck #" + str(t.truck_id) + " now travelling to " + t.location.name + ".")
         print("Odometer: " + str(t.mileage))
         print("")
         # The following code manages to delivery the appropriate packages without editing the list in place (which
@@ -312,9 +317,17 @@ def deliver_packages(t: Truck, g: list):
                 updated_delivery_list.append(pkg)
         t.delivery_list = updated_delivery_list
     print("All destinations have been visited.")
-    dijkstra_sp(g, t.location.id, graph[0].id)
-    print("Truck #" + str(t.id) + " returning to hub (" + graph[0].name + ").")
+    dijkstra_sp(g, t.location.loc_id, graph[0].loc_id)
+    print("Truck #" + str(t.truck_id) + " returning to hub (" + graph[0].name + ").")
     print("Odometer: " + str(t.mileage))
+
+
+def ui(pkg_db: PackageDB):
+    user_in = input("To fetch a delivery status report for all packages at a given time, "
+                    "enter a time of day using the following format: HH:MM")
+    try:
+        datetime.datetime.strptime(user_in, "%H:%M")
+    except Valu
 
 
 if __name__ == '__main__':
@@ -344,3 +357,6 @@ if __name__ == '__main__':
     print("All packages successfully delivered.")
     print("Odometers for trucks 1 and 2 read " + str(t1.mileage) + " and " + str(t2.mileage) + " respectively.")
     print("Total miles travelled for today's deliveries: " + str(t1.mileage + t2.mileage) + ".")
+    selected_time = datetime.time(hour=18)
+    selected_datetime = datetime.datetime.combine(datetime.date.today(), selected_time)
+    db.status_report(selected_datetime)
