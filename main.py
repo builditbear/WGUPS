@@ -1,9 +1,7 @@
-# WGUPS Delivery Optimization Apparatus V1 - by Brandon Chavez, C950
+# WGUPS Delivery Optimization Apparatus V1 - by Brandon Chavez, Student ID#001118464, C950
 # Output: Total mileage travelled by all trucks for this particular delivery solution.
 # Future Fix Log:
-# 1. Ensure that hash table is being utilized efficiently.
-# 2. Write simple interface to check package status at given time.
-# 3. Add load logic to accommodate packages with special notes.
+# 1. Add load logic to accommodate packages with special notes.
 import csv
 import datetime
 import sys
@@ -37,6 +35,11 @@ class Package:
             print("Package #" + str(self.pkg_id) + " was delivered at " + self.delivery_time.strftime("%I:%M") + ".")
         elif local_time >= self.load_time:
             print("Package #" + str(self.pkg_id) + " is en route as of " + self.load_time.strftime("%I:%M") + ".")
+
+    def info(self):
+        print("Delivery address: " + self.address + ", " + self.city + ", " + self.zipcode)
+        print("Delivery deadline: " + self.delivery_deadline)
+        print("Package weight: " + self.masskg + " kg")
 
     # Link this package to its location in our graph via object pointer.
     def associate_destination(self, g: list):
@@ -196,7 +199,46 @@ class Truck:
     def deliver(self, pkg: Package):
         # self.delivery_list.remove(pkg)
         pkg.delivery_time = self.__current_time()
-        print("Package #" + str(pkg.pkg_id) + " being delivered at " + datetime.datetime.strftime(pkg.delivery_time, "%H:%M"))
+        print("Package #" + str(pkg.pkg_id) + " being delivered at " +
+              datetime.datetime.strftime(pkg.delivery_time, "%H:%M"))
+
+
+def main():
+    # The program extracts relevant data from two csv files - one representing package data, and another representing
+    # 'edges' between location 'nodes', both based upon the excel files provided by WGU. Both files must be in the same
+    # directory as this script.
+    # Translate raw package and location details into data structures we can operate on.
+    print("Generating package manifest and location map...")
+    try:
+        graph = csv_to_graph("WGUPS Distance Table.csv")
+        manifest = csv_to_manifest("WGUPS Package File.csv")
+    except FileNotFoundError as e:
+        print(e.args)
+        sys.exit(1)
+
+    print("Generating package database and linking their respective destinations...")
+    db = PackageDB(len(manifest))
+    for package in manifest:
+        db.insert(package)
+        package.associate_destination(graph)
+
+    print("Calculating delivery solution. Delivery simulation begins now.\n")
+    t1 = Truck(db, 1, graph[0])
+    t2 = Truck(db, 2, graph[0])
+    flag = True
+    # Alternates loading and delivering of trucks, and written in a way that prevents us from trying to load
+    # a truck if all packages have been delivered.
+    while manifest:
+        if flag:
+            t1.load(manifest)
+            deliver_packages(t1, graph)
+            flag = False
+        else:
+            t2.load(manifest)
+            deliver_packages(t2, graph)
+            flag = True
+    print("\nDelivery solution for all packages devised.")
+    ui(db, t1, t2)
 
 
 def csv_to_manifest(csv_name):
@@ -229,65 +271,6 @@ def csv_to_graph(csv_name):
     return g
 
 
-# Traces path of given location back to the origin location, and stores path (in order of first to last location
-# visited) in the empty list passed in.
-def trace_path(loc: Location, path: list):
-    path.append(loc)
-    # Now, if there is a previous location, it should be asked to add itself to the path (recursive step)
-    if loc.previous_location:
-        trace_path(loc.previous_location, path)
-    # If there isn't, we have reached the origin, and we should reverse the list so it reads
-    # from startpoint to endpoint.
-    else:
-        path.reverse()
-
-
-def print_path(loc: Location):
-    path = []
-    trace_path(loc, path)
-    for i in range(len(path)):
-        if i == (len(path) - 1):
-            print(path[i].name)
-        else:
-            print(path[i].name + " --> ", end='')
-
-
-# Based on insertion sort algorithm.
-def sort_by_dist_ascending(locations, origin: Location):
-    for i in range(1, len(locations)):
-        for j in range(i, 0, -1):
-            if locations[j-1].get_distance_to(origin.loc_id) > locations[j].get_distance_to(origin.loc_id):
-                # Swap indices of locations.
-                temp = locations[j-1]
-                locations[j-1] = locations[j]
-                locations[j] = temp
-
-
-def dijkstra_sp(g: list, start_loc_id, dest_id):
-    unvisited = []
-    # Extract all locations from graph and enqueue to be visited, then sort by proximity to start location.
-    for loc in g:
-        loc.reset_path()
-        unvisited.append(loc)
-    # start has 0 dist from itself, and will be the first location to be visited.
-    g[start_loc_id].shortest_known_path = 0
-    sort_by_dist_ascending(unvisited, g[start_loc_id])
-    while unvisited:
-        # Visit closest destination until we have reached the destination specified by dest_id.
-        current_loc = unvisited.pop(0)
-        if current_loc.loc_id == dest_id:
-            break
-        for loc in unvisited:
-            distance = current_loc.get_distance_to(loc.loc_id)
-            alt_path = current_loc.shortest_known_path + distance
-            if alt_path < loc.shortest_known_path:
-                loc.shortest_known_path = alt_path
-                loc.previous_location = current_loc
-    print("The shortest known path to " + g[dest_id].name + " from " + g[start_loc_id].name + " is "
-          + str(g[dest_id].shortest_known_path) + " miles.")
-    print_path(g[dest_id])
-
-
 def deliver_packages(t: Truck, g: list):
     destinations = []
     # Determine locations we must visit, and shortest path to each from truck's current location.
@@ -317,46 +300,114 @@ def deliver_packages(t: Truck, g: list):
                 updated_delivery_list.append(pkg)
         t.delivery_list = updated_delivery_list
     print("All destinations have been visited.")
-    dijkstra_sp(g, t.location.loc_id, graph[0].loc_id)
-    print("Truck #" + str(t.truck_id) + " returning to hub (" + graph[0].name + ").")
+    dijkstra_sp(g, t.location.loc_id, g[0].loc_id)
+    print("Truck #" + str(t.truck_id) + " returning to hub (" + g[0].name + ").")
     print("Odometer: " + str(t.mileage))
 
 
-def ui(pkg_db: PackageDB):
-    user_in = input("To fetch a delivery status report for all packages at a given time, "
-                    "enter a time of day using the following format: HH:MM")
-    try:
-        datetime.datetime.strptime(user_in, "%H:%M")
-    except Valu
+def dijkstra_sp(g: list, start_loc_id, dest_id):
+    unvisited = []
+    # Extract all locations from graph and enqueue to be visited, then sort by proximity to start location.
+    for loc in g:
+        loc.reset_path()
+        unvisited.append(loc)
+    # start has 0 dist from itself, and will be the first location to be visited.
+    g[start_loc_id].shortest_known_path = 0
+    sort_by_dist_ascending(unvisited, g[start_loc_id])
+    while unvisited:
+        # Visit closest destination until we have reached the destination specified by dest_id.
+        current_loc = unvisited.pop(0)
+        if current_loc.loc_id == dest_id:
+            break
+        for loc in unvisited:
+            distance = current_loc.get_distance_to(loc.loc_id)
+            alt_path = current_loc.shortest_known_path + distance
+            if alt_path < loc.shortest_known_path:
+                loc.shortest_known_path = alt_path
+                loc.previous_location = current_loc
+    print("The shortest known path to " + g[dest_id].name + " from " + g[start_loc_id].name + " is "
+          + str(g[dest_id].shortest_known_path) + " miles.")
+    print_path(g[dest_id])
+
+
+# Based on insertion sort algorithm.
+def sort_by_dist_ascending(locations, origin: Location):
+    for i in range(1, len(locations)):
+        for j in range(i, 0, -1):
+            if locations[j-1].get_distance_to(origin.loc_id) > locations[j].get_distance_to(origin.loc_id):
+                # Swap indices of locations.
+                temp = locations[j-1]
+                locations[j-1] = locations[j]
+                locations[j] = temp
+
+
+# Traces path of given location back to the origin location, and stores path (in order of first to last location
+# visited) in the empty list passed in.
+def trace_path(loc: Location, path: list):
+    path.append(loc)
+    # Now, if there is a previous location, it should be asked to add itself to the path (recursive step)
+    if loc.previous_location:
+        trace_path(loc.previous_location, path)
+    # If there isn't, we have reached the origin, and we should reverse the list so it reads
+    # from startpoint to endpoint.
+    else:
+        path.reverse()
+
+
+def print_path(loc: Location):
+    path = []
+    trace_path(loc, path)
+    for i in range(len(path)):
+        if i == (len(path) - 1):
+            print(path[i].name)
+        else:
+            print(path[i].name + " --> ", end='')
+
+
+def ui(pkg_db: PackageDB, t1: Truck, t2: Truck):
+    user_in: str = ''
+    print("\nProjected mileage for trucks 1 and 2 at EOD are " +
+          str(t1.mileage) + " and " + str(t2.mileage) + " respectively.")
+    print("Total mileage projected for today's deliveries is: " + str(t1.mileage + t2.mileage) + ".")
+    print("To fetch a delivery status report for all packages at a given time, "
+          "enter the time of day using the following format: HH:MM.\n"
+          "To fetch the info and delivery status of an individual package at a given time,"
+          "enter its package ID followed by the the time of day in the following format: 'HH:MM,ID'\n"
+          "To exit the program, type 'exit'.")
+    while user_in != 'exit':
+        user_in = input()
+        p1 = re.compile('[0-2][0-9]:[0-5][0-9]')
+        # First, verify that hour and minute are valid values in the appropriate format.
+        if p1.match(user_in) is not None:
+            hr_and_min = (user_in[0:5]).split(':')
+            if int(hr_and_min[0]) <= 24 and int(hr_and_min[1]) <= 59:
+                p2 = re.compile('[0-2][0-9]:[0-5][0-9],[0-9]+')
+                # Now, determine course of action based on presence or absence of a package ID.
+                # Case A: A package ID is present, so we should use it's status method.
+                if p2.fullmatch(user_in) is not None:
+                    pkg_id = int((user_in.split(','))[1])
+                    try:
+                        status_time = datetime.datetime.strptime((user_in.split(','))[0], "%H:%M")
+                        status_datetime = datetime.datetime.combine(datetime.datetime.today(), status_time.time())
+                        pkg = pkg_db.search(pkg_id)
+                        pkg.info()
+                        pkg.status(status_datetime)
+                    except KeyError as e:
+                        print(e.args)
+                # Case B: A package ID is not present, so we're being asked to print out a status report.
+                elif p1.fullmatch(user_in) is not None:
+                    status_time = datetime.datetime.strptime(user_in, "%H:%M")
+                    status_datetime = datetime.datetime.combine(datetime.datetime.today(), status_time.time())
+                    pkg_db.status_report(status_datetime)
+                else:
+                    print("Invalid input. Please try again.")
+            else:
+                print("Invalid input. Please try again.")
+        elif user_in == 'exit':
+            print("Exiting program.")
+        else:
+            print("Invalid input. Please try again.")
 
 
 if __name__ == '__main__':
-    # Translate raw package and location details into data structures we can operate on.
-    graph = csv_to_graph("WGUPS Distance Table.csv")
-    manifest = csv_to_manifest("WGUPS Package File.csv")
-    # PackageDB is a hash table for packages with some handy class methods and fields.
-    db = PackageDB(len(manifest))
-    # Populate the db, while linking each package to it's destination for easy access.
-    for package in manifest:
-        db.insert(package)
-        package.associate_destination(graph)
-    t1 = Truck(db, 1, graph[0])
-    t2 = Truck(db, 2, graph[0])
-    flag = True
-    # Alternates loading and delivering of trucks, and written in a way that prevents us from trying to load
-    # a truck if all packages have been delivered.
-    while manifest:
-        if flag:
-            t1.load(manifest)
-            deliver_packages(t1, graph)
-            flag = False
-        else:
-            t2.load(manifest)
-            deliver_packages(t2, graph)
-            flag = True
-    print("All packages successfully delivered.")
-    print("Odometers for trucks 1 and 2 read " + str(t1.mileage) + " and " + str(t2.mileage) + " respectively.")
-    print("Total miles travelled for today's deliveries: " + str(t1.mileage + t2.mileage) + ".")
-    selected_time = datetime.time(hour=18)
-    selected_datetime = datetime.datetime.combine(datetime.date.today(), selected_time)
-    db.status_report(selected_datetime)
+    main()
