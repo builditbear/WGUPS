@@ -44,6 +44,14 @@ class Package:
         print("Delivery address: " + self.address + ", " + self.city + ", " + self.zipcode)
         print("Delivery deadline: " + self.delivery_deadline)
         print("Package weight: " + self.masskg + " kg")
+        if self.special_notes:
+            print(self.special_notes)
+        if self.time_available:
+            print(self.time_available.strftime("%H:%M"))
+        if self.load_time:
+            print("Loaded at: " + self.load_time.strftime("%H:%M") + ".")
+        if self.delivery_time:
+            print("Delivered at: " + self.load_time.strftime("%H:%M") + ".")
 
     # Link this package to its location in our graph via object pointer.
     def associate_destination(self, g: list):
@@ -103,35 +111,15 @@ class PackageDB:
             return
         # Check for delayed packages: Query user for time of arrival.
         p2 = re.compile('Delayed on flight')
-        if p2.match(pkg.special_notes)
-            time_pattern = re.compile('[0-2][0-9]:[0-5][0-9]')
-            time_pattern2 = re.compile('[0-9]:[0-5][0-9]')
-            try:
-                timestr = input("We have detected that package " + str(pkg.pkg_id) +
-                                "'s is delayed on its flight.\n "
-                                "Please enter estimated time of arrival in format 'HH:MM' or 'H:MM'.")
-                if not (time_pattern.fullmatch(timestr) or time_pattern2.fullmatch(timestr)):
-                    raise ValueError("Invalid time format. Must be of format 'HH:MM' or 'H:MM'.")
-                pkg.time_available = str_to_datetime(timestr)
-            except ValueError as e:
-                print(e)
+        if p2.match(pkg.special_notes):
+            update_time_available(pkg, "We have detected that this package is delayed.\n"
+                                       "Please enter ETA in format 'HH:MM' or 'H:MM':\n")
         # Check for incorrectly addressed packages: Query user for correct addr, and time it will be available.
         p3 = re.compile('Wrong address listed')
         if p3.match(pkg.special_notes):
-            time_pattern = re.compile('[0-2][0-9]:[0-5][0-9]')
-            time_pattern2 = re.compile('[0-9]:[0-5][0-9]')
-            try:
-                timestr = input("We have detected that package " + str(pkg.pkg_id) +
-                                "'s address is incorrect.\n "
-                                "Please enter estimated time when address will be "
-                                "known by WGUPS in format 'HH:MM' or 'H:MM'.\n")
-                if not (time_pattern.fullmatch(timestr) or time_pattern2.fullmatch(timestr)):
-                    raise ValueError("Invalid time format. Must be of format 'HH:MM' or 'H:MM'.")
-                pkg.time_available = str_to_datetime(timestr)
-            except ValueError as e:
-                print(e)
-            updated_address = input("What is the correct address?\n")
-            pkg.address = updated_address
+            update_time_available(pkg, "We have detected that this package bears an incorrect address.\n"
+                                       "Please enter ETA in format 'HH:MM' or 'H:MM':\n")
+            update_pkg_addr(pkg)
         # Iteratively look at the next slot until an open slot or tombstone is found.
         for i in range(self.db_size):
             if self.db[i] is None or self.db[i] == "tombstone":
@@ -166,6 +154,35 @@ class PackageDB:
                 self.db[key] = "tombstone"
         # If execution reaches here, we've checked every possible hash key possible.
         raise KeyError("Package id " + str(id) + " was not found in database.")
+
+
+def update_time_available(pkg: Package, input_prompt: str):
+    time_pattern = re.compile('[0-2][0-9]:[0-5][0-9]')
+    time_pattern2 = re.compile('[0-9]:[0-5][0-9]')
+    for input_attempt in range(3):
+        try:
+            print("Special circumstance detected for package ID " + str(pkg.pkg_id) + " -> ", end="")
+            timestr = input(input_prompt)
+            if not (time_pattern.fullmatch(timestr) or time_pattern2.fullmatch(timestr)):
+                raise ValueError("Invalid time format. Must be of format 'HH:MM' or 'H:MM'.\n")
+            else:
+                pkg.time_available = str_to_datetime(timestr)
+                break
+        except ValueError as e:
+            print(e)
+            if input_attempt == 2:
+                raise ValueError("Invalid time format. Max attempts exceeded. System shutting down.")
+
+
+def update_pkg_addr(pkg: Package):
+    updated_address = input("What is the correct address?\n")
+    pkg.address = updated_address
+    updated_city = input("What is the correct city?\n")
+    pkg.city = updated_city
+    updated_state = input("What is the correct state?\n")
+    pkg.state = updated_state
+    updated_zipcode = input("What is the updated zipcode?\n")
+    pkg.zipcode = updated_zipcode
 
 
 class Location:
@@ -214,7 +231,7 @@ class Truck:
         self.location: Location = location
 
     # Calculates time of day for a given truck based on how far it has travelled at that point in time.
-    def __current_time(self) -> datetime.datetime:
+    def current_time(self) -> datetime.datetime:
         time_since_day_start = datetime.timedelta(hours=self.mileage / self.avg_speed)
         return start_time_date + time_since_day_start
 
@@ -225,6 +242,7 @@ class Truck:
         # Provided we have not exceeded capacity, and manifest isn't empty,
         # remove the next pkg from manifest, update it's load time, and "load" onto truck.
         counter = 0
+        next_load: List[Package] = []
         while (len(self.delivery_list) < self.capacity) and manif and counter < load_cap:
             current_pkg = manif.pop(0)
             p1 = re.compile('Can only be on truck')
@@ -236,34 +254,39 @@ class Truck:
                 # If this package has to be loaded onto a particular truck, only load if this is the right truck.
                 if p1.match(note):
                     tid = note[len(note) - 1: len(note)]
-                    if self.truck_id == tid[0]:
-                        current_pkg.load_time = self.__current_time()
+                    if self.truck_id == int(tid):
+                        current_pkg.load_time = self.current_time()
                         self.delivery_list.append(current_pkg)
                         counter += 1
+                    else:
+                        next_load.append(current_pkg)
                 # If the package is delayed, it can only be loaded once it has arrived at the depot.
                 # If the package has the incorrect address listed, it's address has been updated preemptively during
                 # insertion into the package database, and it's expected arrival time stored in package info. It is
                 # then treated similarly to a delayed package.
                 elif p2.match(note) or p3.match(note):
-                    if current_pkg.time_available <= self.__current_time():
-                        current_pkg.load_time = self.__current_time()
+                    if current_pkg.time_available <= self.current_time():
+                        current_pkg.load_time = self.current_time()
                         self.delivery_list.append(current_pkg)
                         counter += 1
+                    else:
+                        next_load.append(current_pkg)
                 # If the package had delivery dependencies, we need to deliver package along with all dependencies.
                 elif p4.match(note):
-                    pass
-                # This package has a special note, but it's criteria have not been met. Put it back onto the manifest
-                # and evaluate the next package for possible loading.
-                else:
-                    manif.append(current_pkg)
+                    current_pkg.load_time = self.current_time()
+                    self.delivery_list.append(current_pkg)
+                    counter += 1
             # If the current_pkg bears no restrictions, simply load it and update our counter.
             else:
-                current_pkg.load_time = self.__current_time()
+                current_pkg.load_time = self.current_time()
                 self.delivery_list.append(current_pkg)
                 counter += 1
+        if next_load:
+            for pkg in next_load:
+                manif.append(pkg)
 
     def deliver(self, pkg: Package):
-        pkg.delivery_time = self.__current_time()
+        pkg.delivery_time = self.current_time()
         print("Package #" + str(pkg.pkg_id) + " being delivered at " +
               datetime.datetime.strftime(pkg.delivery_time, "%H:%M"))
 
@@ -271,7 +294,7 @@ class Truck:
 # Small helper function to convert strings of the form "HH:MM" to a datetime object for today's date.
 # Also works for strings of the form "H:MM".
 def str_to_datetime(timestr: str):
-    t = datetime.datetime.strptime(timestr)
+    t = datetime.datetime.strptime(timestr, "%H:%M")
     return datetime.datetime.combine(datetime.datetime.today(), t.time())
 
 
@@ -302,11 +325,11 @@ def main():
     # a truck if all packages have been delivered.
     while manifest:
         if flag:
-            t1.load(manifest, 5)
+            t1.load(manifest)
             deliver_packages(t1, graph)
             flag = False
         else:
-            t2.load(manifest, 5)
+            t2.load(manifest)
             deliver_packages(t2, graph)
             flag = True
     print("\nDelivery solution for all packages devised.")
