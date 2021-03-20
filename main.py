@@ -23,6 +23,7 @@ class Package:
         self.zipcode = zipcode
         self.masskg = masskg
         self.special_notes = special_notes
+        self.dependencies: List[Package] or None = []
         # This field is used for storing the time that delayed packages arrive at hub, or alternatively, the time
         # at which WGUPS "receives" the correct address for an incorrectly addressed package, thus making that package
         # available for delivery.
@@ -156,35 +157,6 @@ class PackageDB:
         raise KeyError("Package id " + str(id) + " was not found in database.")
 
 
-def update_time_available(pkg: Package, input_prompt: str):
-    time_pattern = re.compile('[0-2][0-9]:[0-5][0-9]')
-    time_pattern2 = re.compile('[0-9]:[0-5][0-9]')
-    for input_attempt in range(3):
-        try:
-            print("Special circumstance detected for package ID " + str(pkg.pkg_id) + " -> ", end="")
-            timestr = input(input_prompt)
-            if not (time_pattern.fullmatch(timestr) or time_pattern2.fullmatch(timestr)):
-                raise ValueError("Invalid time format. Must be of format 'HH:MM' or 'H:MM'.\n")
-            else:
-                pkg.time_available = str_to_datetime(timestr)
-                break
-        except ValueError as e:
-            print(e)
-            if input_attempt == 2:
-                raise ValueError("Invalid time format. Max attempts exceeded. System shutting down.")
-
-
-def update_pkg_addr(pkg: Package):
-    updated_address = input("What is the correct address?\n")
-    pkg.address = updated_address
-    updated_city = input("What is the correct city?\n")
-    pkg.city = updated_city
-    updated_state = input("What is the correct state?\n")
-    pkg.state = updated_state
-    updated_zipcode = input("What is the updated zipcode?\n")
-    pkg.zipcode = updated_zipcode
-
-
 class Location:
     def __init__(self, loc_id, parent_graph, name, addr, zipcode, distances):
         self.loc_id = int(loc_id)
@@ -291,6 +263,35 @@ class Truck:
               datetime.datetime.strftime(pkg.delivery_time, "%H:%M"))
 
 
+def update_time_available(pkg: Package, input_prompt: str):
+    time_pattern = re.compile('[0-2][0-9]:[0-5][0-9]')
+    time_pattern2 = re.compile('[0-9]:[0-5][0-9]')
+    for input_attempt in range(3):
+        try:
+            print("Special circumstance detected for package ID " + str(pkg.pkg_id) + " -> ", end="")
+            timestr = input(input_prompt)
+            if not (time_pattern.fullmatch(timestr) or time_pattern2.fullmatch(timestr)):
+                raise ValueError("Invalid time format. Must be of format 'HH:MM' or 'H:MM'.\n")
+            else:
+                pkg.time_available = str_to_datetime(timestr)
+                break
+        except ValueError as e:
+            print(e)
+            if input_attempt == 2:
+                raise ValueError("Invalid time format. Max attempts exceeded. System shutting down.")
+
+
+def update_pkg_addr(pkg: Package):
+    updated_address = input("What is the correct address?\n")
+    pkg.address = updated_address
+    updated_city = input("What is the correct city?\n")
+    pkg.city = updated_city
+    updated_state = input("What is the correct state?\n")
+    pkg.state = updated_state
+    updated_zipcode = input("What is the updated zipcode?\n")
+    pkg.zipcode = updated_zipcode
+
+
 # Small helper function to convert strings of the form "HH:MM" to a datetime object for today's date.
 # Also works for strings of the form "H:MM".
 def str_to_datetime(timestr: str):
@@ -340,10 +341,17 @@ def csv_to_manifest(csv_name) -> list:
     manif = []
     with open(csv_name, newline='') as manifest_csv:
         reader = csv.DictReader(manifest_csv)
-        for pkg in reader:
-            manif.append(Package(pkg["Package ID"], pkg["Address"], pkg["City"],
-                                 pkg["State"], pkg["Zip"], pkg["Delivery Deadline"],
-                                 pkg["MassKG"], pkg["Special Notes"]))
+        for pkg_entry in reader:
+            dependency_pattern = re.compile('Must be delivered with')
+            pkg_id_pattern = re.compile('[0-9]+')
+            pkg = Package(pkg_entry["Package ID"], pkg_entry["Address"], pkg_entry["City"],
+                          pkg_entry["State"], pkg_entry["Zip"], pkg_entry["Delivery Deadline"],
+                          pkg_entry["MassKG"], pkg_entry["Special Notes"])
+            # If this package must be delivered with other packages, we will scan the string for numbes
+            # representing those packages' IDs, which can then be associated with the package.
+            if dependency_pattern.match(pkg.special_notes):
+                pkg.dependencies = pkg_id_pattern.findall(pkg.special_notes)
+            manif.append(pkg)
     return manif
 
 
