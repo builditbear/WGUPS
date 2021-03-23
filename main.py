@@ -10,12 +10,18 @@ import re
 from typing import Optional
 from typing import List
 
+# Note that although this program is chiefly concerned with time of day rather than the date (this program is designedd
+# for "Daily Local Deliveries" after all), it uses datetime objects, since the time object type in Python's
+# datetime library does not support comparisons or strptime (a method which allows us to extract a time from
+# a pre-formatted string). This causes quite a bit of extra work, but it will allow for tracking deliveries spanning
+# multiple days in the future if WGUPS should expand its operation.
 start_time = datetime.time(hour=8)
 start_time_date = datetime.datetime.combine(datetime.date.today(), start_time)
 
 
+# An abstraction of all of the important characteristics of a package. Can be queried directly for info and status.
 class Package:
-    def __init__(self, pkg_id, address, city, state, zipcode, delivery_deadline, masskg, special_notes):
+    def __init__(self, pkg_id, address, city, state, zipcode, delivery_deadline, masskg, special_notes):  # O(1)
         self.pkg_id = int(pkg_id)  # Int type more convenient as we will perform calculations with this value.
         self.address = address
         self.delivery_deadline = delivery_deadline
@@ -24,6 +30,7 @@ class Package:
         self.zipcode = zipcode
         self.masskg = masskg
         self.special_notes = special_notes
+        # A dependency in this context is a package that this package must be loaded onto the same truck with.
         self.dependencies: List[Package] or None = []
         # This field is used for storing the time that delayed packages arrive at hub, or alternatively, the time
         # at which WGUPS "receives" the correct address for an incorrectly addressed package, thus making that package
@@ -33,28 +40,31 @@ class Package:
         self.load_time: Optional[datetime.datetime] = None
         self.destination: Optional[Location] = None
 
-    def status(self, local_time: datetime.datetime):
+    # Determines where a package is located at the given time, based on the given time's relation to this package's
+    # time of delivery and loading.
+    def status(self, local_time: datetime.datetime):  # O(1)
         # If delivery/load times are unpopulated, or the current_time precedes the load_time, must be at hub.
         if (not (self.delivery_time or self.load_time)) or (local_time < self.load_time):
             print("Package #" + str(self.pkg_id) + " is currently at the hub.")
+        # If the package posseses a delivery time, and the current_time is later than that time, package is delivered.
         elif self.delivery_time is not None and local_time >= self.delivery_time:
             print("Package #" + str(self.pkg_id) + " was delivered at " + self.delivery_time.strftime("%I:%M") + ".")
+        # Otherwise, it is some time between the time this package was loaded but before it has been delivered.
+        # Therefore, it must be en route to its destination.
         elif local_time >= self.load_time:
             print("Package #" + str(self.pkg_id) + " is en route as of " + self.load_time.strftime("%I:%M") + ".")
 
-    def info(self):
+    def info(self):  # O(1)
         print("Delivery address: " + self.address + ", " + self.city + ", " + self.zipcode)
         print("Delivery deadline: " + self.delivery_deadline)
         print("Package weight: " + self.masskg + " kg")
         if self.special_notes:
             print(self.special_notes)
-        if self.time_available:
-            print(self.time_available.strftime("%H:%M"))
         if self.load_time:
             print("Loaded at: " + self.load_time.strftime("%H:%M") + ".")
 
-    # Link this package to its location in our graph via object pointer.
-    def associate_destination(self, g: list):
+    # Link this package to the location it must be delivered to in our graph via object pointer.
+    def associate_destination(self, g: list):  # O(n)
         for location in g:
             if (self.address, self.zipcode) == (location.addr, location.zipcode):
                 self.destination = location
@@ -62,34 +72,37 @@ class Package:
         print("No match for package address found in graph for package ID " + str(self.pkg_id) + ".")
 
 
+# A specialized hash table for package objects which also contains basic metadata on the hash table as well as
+# functions and methods for modifying and interacting with data.
 class PackageDB:
+    # Initializes with far more space than is expected to be necessary in order to ensure rapid lookup time.
     def __init__(self, number_of_packages):  # O(1)
         self.db_size = number_of_packages * 2
         self.db: List[Package or None] = [None] * self.db_size
         # load factor = number of elements / db_size
         self.load_factor: float = 0
 
-    def __hashfunc(self, pkg_id):
+    # Adjusted to reflect starting index of 0 vs first package ID being 1.
+    def __hashfunc(self, pkg_id):  # O(1)
         return (pkg_id - 1) % self.db_size
 
-    # Generates subset of db containing all packages for use in delivery truck.
-    # Allows us to keep track of what packages have been delivered without altering
-    # db structure itself.
-    def generate_manifest(self):
-        return filter(lambda pkg: True if pkg is not None else False, self.db)
-
-    def get_status(self, pkg_id, local_time: datetime.datetime):
+    # Allows querying a package for it's info and status at the given time.
+    def get_status(self, pkg_id, local_time: datetime.datetime):  # O(n)
         pkg = self.search(pkg_id)
         if pkg is not None:
             pkg.status(local_time)
 
-    def status_report(self, local_time: datetime.datetime):
+    # Queries this database for a comprehensive report on the status of all packages at the given time.
+    def status_report(self, local_time: datetime.datetime):  # O(n)
         for pkg in self.db:
             if pkg is not None:
                 self.get_status(pkg.pkg_id, local_time)
 
-    # After load factor exceeds .5 for the first time, it should be between 1/4 and 1/2 at any given time.
-    def __maintain_load_factor(self):
+    # Once the database has been populated, it's load factor should be 1/2. In the event that more packages need to be
+    # added for delivery, this will ensure that the load factor remains between 1/4 and 1/2 at any given time.
+    # In the future, this logic could be enhanced to shrink the database if the load factor is low enough, which could
+    # help save memory wasted on unused "buckets".
+    def __maintain_load_factor(self):  # O(n^2)
         self.load_factor = sum(i is not None for i in self.db) / self.db_size
         if self.load_factor > .5:
             self.db.append([None] * self.db_size)  # Expands table by factor of two to accommodate new packages.
@@ -97,11 +110,11 @@ class PackageDB:
             for i in range(len(self.db)):
                 if self.db[i] is not None:
                     pkg = self.db.pop(i)  # Remove the package before replacing it at new hash index.
-                    self.insert(pkg)
+                    self.insert(pkg)  # O(n)
 
     # Takes a list with ordered values listed in Package init method, or a Package object.
     # Assumes that there is always an empty spot/tombstone in db: Db will resize itself to maintain optimal load factor.
-    def insert(self, package_details):
+    def insert(self, package_details):  # O(n)
         if type(package_details) is list:
             pkg = Package(*package_details)
         elif type(package_details) is Package:
@@ -131,7 +144,7 @@ class PackageDB:
         raise KeyError("Error: The entire hash table was searched, but no empty slot was found."
                        "Please inspect load factor expansion logic.")
 
-    def search(self, pkg_id: int) -> Package:
+    def search(self, pkg_id: int) -> Package:  # O(n)
         # Iteratively look at buckets until desired pkg or empty slot is found.
         # If everything is hashed uniquely, O(1) runtime.
         for i in range(self.db_size):
@@ -144,7 +157,7 @@ class PackageDB:
         # If execution reaches here, we've checked every possible hash key possible.
         raise KeyError("Package id " + str(pkg_id) + " was not found in database.")
 
-    def remove(self, pkg_id):
+    def remove(self, pkg_id):  # O(n)
         # Similar behavior to search, but bucket's contents are replaced with a tombstone
         # when the desired package is found.
         for i in range(self.db_size):
@@ -157,7 +170,11 @@ class PackageDB:
         # If execution reaches here, we've checked every possible hash key possible.
         raise KeyError("Package id " + str(id) + " was not found in database.")
 
-    def link_dependencies(self):
+    # This is meant to executed at any point after the database has been populated with all packages in the csv.
+    # It will associate a package with other packages listed as dependencies in special notes. This effectively creates
+    # an undirected graph amongst packages in the database whose "edges" we can traverse to map out packages
+    # which must be loaded together.
+    def link_dependencies(self):  # O(n^2)
         dependency_pattern = re.compile('Must be delivered with')
         pkg_id_pattern = re.compile('[0-9]+')
         for pkg in self.db:
@@ -169,14 +186,18 @@ class PackageDB:
                     other_pkg.dependencies.append(pkg)
 
 
+# Represents a geographical location and pertinent metadata.
 class Location:
-    def __init__(self, loc_id, parent_graph, name, addr, zipcode, distances):
+    def __init__(self, loc_id, parent_graph, name, addr, zipcode, distances):  # O(n)
         self.loc_id = int(loc_id)
         self.parent_graph = parent_graph
         self.name = name
         self.addr = addr
         self.zipcode = zipcode
+        # Refers to the shortest known path to this location from some arbitrary starting location used in Dijkstra_SP.
         self.shortest_known_path = sys.maxsize
+        # Similarly, refers to the location preceding this one on the shortest path to this location from some arbitrary
+        # location. Used in Dijkstra_SP.
         self.previous_location = None
         self.distances = []
         for distance in distances:
@@ -185,7 +206,10 @@ class Location:
             else:
                 break
 
-    def get_distance_to(self, location_id: int):
+    # Uses distance data contained within this location and others in the parent graph to determine the known distance
+    # to another location. Note that this is not necessarily the *shortest* distance, merely the distance of a known
+    # direct path to that location.
+    def get_distance_to(self, location_id: int):  # O(1)
         # To avoid data duplication, the graph's structure mirrors that of the WGUPS Distance Table file:
         # Each location stores only distance values for previous entries in the graph, exploiting the bidirectional
         # nature of the data, and the fact that the distance table represents a full mesh graph.
@@ -198,13 +222,16 @@ class Location:
         elif location_id > self.loc_id:
             return self.parent_graph[location_id].distances[self.loc_id]
 
-    def reset_path(self):
+    # Clears out the "shortest path" and "previous location" fields, as they are relative to whatever the starting
+    # location is for the most recent run of Dijkstra_SP.
+    def reset_path(self):  # O(1)
         self.shortest_known_path = sys.maxsize
         self.previous_location = None
 
 
+# Represents a WGUPS delivery truck in terms of its basic characteristics, package load, and linked package database.
 class Truck:
-    def __init__(self, pkg_db, truck_id, location: Location, avg_speed=18, capacity=16, mileage=0):
+    def __init__(self, pkg_db, truck_id, location: Location, avg_speed=18, capacity=16, mileage=0):  # O(1)
         self.truck_id = truck_id
         self.avg_speed = avg_speed
         self.capacity = capacity
@@ -215,14 +242,14 @@ class Truck:
         self.location: Location = location
 
     # Calculates time of day for a given truck based on how far it has travelled at that point in time.
-    def current_time(self) -> datetime.datetime:
+    def current_time(self) -> datetime.datetime:  # O(1)
         time_since_day_start = datetime.timedelta(hours=self.mileage / self.avg_speed)
         return start_time_date + time_since_day_start
 
     # Need to update this once Dijkstra is working with logic for handling special notes & deadlines.
     # Optional arg "load_cap" can be used to load only up to a certain number of packages at once
     # (provided there are packages available to load and that the truck itself is not already full).
-    def load(self, manif: List[Package], load_cap=sys.maxsize):
+    def load(self, manif: List[Package], load_cap=sys.maxsize):  # O(n^2) - due to elif for p4 having loop.
         # Provided we have not exceeded capacity, and manifest isn't empty,
         # remove the next pkg from manifest, update it's load time, and "load" onto truck.
         counter = 0
@@ -259,7 +286,7 @@ class Truck:
                     discover_dependencies(current_pkg, self.db, transitive_dependencies)
                     if (len(self.delivery_list) + len(transitive_dependencies) <= self.capacity
                             and counter + len(transitive_dependencies) < load_cap):
-                        for pkg in transitive_dependencies:
+                        for pkg in transitive_dependencies:  # O(n)
                             self.__load_pkg(pkg)
             # If the current_pkg bears no restrictions, simply load it and update our counter.
             else:
@@ -271,40 +298,40 @@ class Truck:
             for pkg in next_load:
                 manif.insert(0, pkg)
 
-    def __load_pkg(self, pkg: Package):
+    def __load_pkg(self, pkg: Package):  # O(1)
         pkg.load_time = self.current_time()
         self.delivery_list.append(pkg)
 
-    def deliver(self, pkg: Package):
+    def deliver(self, pkg: Package):  # O(1)
         pkg.delivery_time = self.current_time()
         print("Package #" + str(pkg.pkg_id) + " being delivered at " +
               datetime.datetime.strftime(pkg.delivery_time, "%H:%M"))
 
 
-def main():
+def main():  # O(n^4)
     # The program extracts relevant data from two csv files - one representing package data, and another representing
     # 'edges' between location 'nodes', both based upon the excel files provided by WGU. Both files must be in the same
     # directory as this script.
     # Translate raw package and location details into data structures we can operate on.
     print("Generating package manifest and location map...")
     try:
-        graph = csv_to_graph("WGUPS Distance Table.csv")
-        manifest = csv_to_manifest("WGUPS Package File.csv")
+        graph = csv_to_graph("WGUPS Distance Table.csv")  # O(n^2)
+        manifest = csv_to_manifest("WGUPS Package File.csv")  # O(n)
     except FileNotFoundError as e:
         print(e.args)
         sys.exit(1)
 
     print("Sorting manifest by delivery deadline to ensure timely delivery...")
-    sort_by_delivery_priority(manifest)
+    sort_by_delivery_priority(manifest)  # O(n^2)
 
     print("Generating package database and linking their respective destinations...")
     db = PackageDB(len(manifest))
-    for package in manifest:
+    for package in manifest:  # O(n)
         db.insert(package)
         package.associate_destination(graph)
 
     print("Linking package dependencies...")
-    db.link_dependencies()
+    db.link_dependencies()  # O(n^2)
 
     print("Calculating delivery solution. Delivery simulation begins now.\n")
     t1 = Truck(db, 1, graph[0])
@@ -312,7 +339,7 @@ def main():
     flag = True
     # Alternates loading and delivering of trucks, and written in a way that prevents us from trying to load
     # a truck if all packages have been delivered.
-    while manifest:
+    while manifest:  # O(n*n^3) = O(n^4), yikes.
         if flag:
             t1.load(manifest)
             deliver_packages(t1, graph)
@@ -322,7 +349,7 @@ def main():
             deliver_packages(t2, graph)
             flag = True
     print("\nDelivery solution for all packages devised.")
-    ui(db, t1, t2)
+    ui(db, t1, t2)  # O(n)
 
 # Core Functions/Methods - implemented directly in main method. Listed in order of use.
 # ======================================================================================================================
@@ -332,25 +359,25 @@ def main():
 # Entries for distances to other hubs. Note that although the csv is based entirely on the distance table xml provided
 # by WGU, it is not enough to simply convert that file to a csv and then use that in this program. The csv used
 # must be in same directory as the program.
-def csv_to_graph(csv_name):
+def csv_to_graph(csv_name):  # O(n^2)
     g = []
     with open(csv_name, newline='') as distance_table:
         reader = csv.reader(distance_table)
         index = 0
-        for entry in reader:
+        for entry in reader:  # O(n)
             distances = []
-            for dist in entry[3:]:
+            for dist in entry[3:]:  # O(n)
                 if not dist:
                     break
                 else:
                     distances.append(float(dist))
-            g.append(Location(index, g, entry[0], entry[1], entry[2], distances))
+            g.append(Location(index, g, entry[0], entry[1], entry[2], distances))  # O(1)
             index += 1
     return g
 
 
 # Based on the WGUPS package xml provided by WGU in a similar fashion to csv_to_graph above.
-def csv_to_manifest(csv_name) -> list:
+def csv_to_manifest(csv_name) -> list:  # O(n)
     manif = []
     with open(csv_name, newline='') as manifest_csv:
         reader = csv.DictReader(manifest_csv)
@@ -365,7 +392,7 @@ def csv_to_manifest(csv_name) -> list:
 
 
 # Based on insertion sort algorithm. Ensures that trucks attempt to load packages with deadlines first.
-def sort_by_delivery_priority(manifest: List[Package]):
+def sort_by_delivery_priority(manifest: List[Package]):  # O(n^2)
     for i in range(1, len(manifest)):
         for j in range(i, 0, -1):
             deadline1 = manifest[j-1].delivery_deadline
@@ -387,16 +414,16 @@ def sort_by_delivery_priority(manifest: List[Package]):
 # Core delivery logic which implements a version of Dijstra's Shortest Path algorithm. Heuristically minimizes mileage
 # by delivering whichever package is nearest to the truck's current location. It will do this until all packages onboard
 # are delivered, and then take the shortest return path to the hub from it's current location.
-def deliver_packages(t: Truck, g: List[Location]):
+def deliver_packages(t: Truck, g: List[Location]):  # O(n^3)
     destinations = []
     # Determine locations we must visit, and shortest path to each from truck's current location.
-    for pkg in t.delivery_list:
+    for pkg in t.delivery_list:  # O(n)
         if pkg.destination not in destinations:
             destinations.append(pkg.destination)
-    while destinations:
-        for destination in destinations:
-            dijkstra_sp(g, t.location.loc_id, destination.loc_id)
-        destinations.sort(key=lambda d: d.shortest_known_path)
+    while destinations:  # O(n*n^2 + n*log(n) + n + n^2) = O(n^3)
+        for destination in destinations:  # O(n)
+            dijkstra_sp(g, t.location.loc_id, destination.loc_id)  # O(n^2)
+        destinations.sort(key=lambda d: d.shortest_known_path)  # O(n*log(n))
         # Travel to the nearest location, update our location and mileage incurred by trip, deliver packages.
         t.location = destinations.pop(0)
         t.mileage += t.location.shortest_known_path
@@ -409,14 +436,14 @@ def deliver_packages(t: Truck, g: List[Location]):
         # causes a bug where a pkg is skipped if its predecessor is delivered) and without requiring an extra loop.
         # Updated_delivery_list contains packages that are NOT delivered yet.
         updated_delivery_list = []
-        for pkg in t.delivery_list:
+        for pkg in t.delivery_list:  # O(n)
             if pkg.destination is t.location:
                 t.deliver(pkg)
             else:
                 updated_delivery_list.append(pkg)
         t.delivery_list = updated_delivery_list
     print("All destinations have been visited.")
-    dijkstra_sp(g, t.location.loc_id, g[0].loc_id)
+    dijkstra_sp(g, t.location.loc_id, g[0].loc_id)  # O(n^2)
     # Note that g[0], the first location registered in our location graph, is assumed to be the hub.
     print("Truck #" + str(t.truck_id) + " returning to hub (" + g[0].name + ").")
     print("Odometer: " + str(t.mileage))
@@ -425,7 +452,7 @@ def deliver_packages(t: Truck, g: List[Location]):
 # The user interface outputs the total projected mileage of all trucks incurred by the end of the day.
 # It will also allow the user to request copmrehensive status reports or info on any package in the database
 # at any time during the day.
-def ui(pkg_db: PackageDB, t1: Truck, t2: Truck):
+def ui(pkg_db: PackageDB, t1: Truck, t2: Truck):  # O(n) - while loop execution time depends on n # of queries by user.
     user_in: str = ''
     print("\nProjected mileage for trucks 1 and 2 at EOD are " +
           str(t1.mileage) + " and " + str(t2.mileage) + " respectively.")
@@ -476,13 +503,13 @@ def ui(pkg_db: PackageDB, t1: Truck, t2: Truck):
 
 # Small helper function to convert strings of the form "HH:MM" to a datetime object for today's date.
 # Also works for strings of the form "H:MM".
-def str_to_datetime(timestr: str):
+def str_to_datetime(timestr: str):  # O(1)
     t = datetime.datetime.strptime(timestr, "%H:%M")
     return datetime.datetime.combine(datetime.datetime.today(), t.time())
 
 
 # Used in the event that a package's address is known to be incorrect.
-def update_pkg_addr(pkg):
+def update_pkg_addr(pkg):  # O(n)
     updated_address = input("What is the correct address?\n")
     pkg.address = updated_address
     updated_city = input("What is the correct city?\n")
@@ -494,7 +521,7 @@ def update_pkg_addr(pkg):
 
 
 # Used in the event that a package is known to be delayed, and thus unavailable for loading at the hub.
-def update_time_available(pkg, input_prompt: str):
+def update_time_available(pkg, input_prompt: str):  # O(1)
     time_pattern = re.compile('[0-2][0-9]:[0-5][0-9]')
     time_pattern2 = re.compile('[0-9]:[0-5][0-9]')
     for input_attempt in range(3):
@@ -517,25 +544,26 @@ def update_time_available(pkg, input_prompt: str):
 # transitive: e.g., If package 1 has to be loaded with package 3, it follows that the converse is true.
 # If package 1 must be loaded with package 3, and package 3 must be loaded with package 5, then it follows that
 # package 1 must be loaded with package 5.
-def discover_dependencies(pkg, pkg_db, transitive_dependencies):
+def discover_dependencies(pkg, pkg_db, transitive_dependencies):  # O(n^2)
     if pkg not in transitive_dependencies:
         transitive_dependencies.append(pkg)
         if pkg.dependencies:
-            for other_pkg in pkg.dependencies:
+            for other_pkg in pkg.dependencies:  # O(n)
+                # Also O(n) as the recursive call may continue any number of time before reaching base case.
                 discover_dependencies(other_pkg, pkg_db, transitive_dependencies)
 
 
 # Based on Dijkstra Shortest Path algorithm.
-def dijkstra_sp(g: list, start_loc_id, dest_id):
+def dijkstra_sp(g: list, start_loc_id, dest_id):  # O(n^2) - higher time complexity due to insertion sort (sort_by_dist)
     unvisited = []
     # Extract all locations from graph and enqueue to be visited, then sort by proximity to start location.
-    for loc in g:
+    for loc in g:  # O(n)
         loc.reset_path()
         unvisited.append(loc)
     # start has 0 dist from itself, and will be the first location to be visited.
     g[start_loc_id].shortest_known_path = 0
-    sort_by_dist_ascending(unvisited, g[start_loc_id])
-    while unvisited:
+    sort_by_dist_ascending(unvisited, g[start_loc_id])  # O(n^2)
+    while unvisited:  # O(n) - time complexity governed by number of locations in graph and destination.
         # Visit closest destination until we have reached the destination specified by dest_id.
         current_loc = unvisited.pop(0)
         if current_loc.loc_id == dest_id:
@@ -552,7 +580,7 @@ def dijkstra_sp(g: list, start_loc_id, dest_id):
 
 
 # Based on insertion sort algorithm.
-def sort_by_dist_ascending(locations, origin: Location):
+def sort_by_dist_ascending(locations, origin: Location):  # O(n^2)
     for i in range(1, len(locations)):
         for j in range(i, 0, -1):
             if locations[j-1].get_distance_to(origin.loc_id) > locations[j].get_distance_to(origin.loc_id):
@@ -561,7 +589,7 @@ def sort_by_dist_ascending(locations, origin: Location):
 
 
 # Swaps previous item with the item at the provided index (j).
-def swap_with_previous(li: list, j: int):
+def swap_with_previous(li: list, j: int):  # O(1)
     temp = li[j - 1]
     li[j - 1] = li[j]
     li[j] = temp
@@ -569,7 +597,7 @@ def swap_with_previous(li: list, j: int):
 
 # Traces path of given location back to the origin location, and stores path (in order of first to last location
 # visited) in the empty list passed in.
-def trace_path(loc: Location, path: list):
+def trace_path(loc: Location, path: list):  # O(n) - Recursively calls itself n times prior to base case.
     path.append(loc)
     # Now, if there is a previous location, it should be asked to add itself to the path (recursive step)
     if loc.previous_location:
@@ -577,11 +605,11 @@ def trace_path(loc: Location, path: list):
     # If there isn't, we have reached the origin, and we should reverse the list so it reads
     # from startpoint to endpoint.
     else:
-        path.reverse()
+        path.reverse()  # O(n)
 
 
 # Outputs the provided path in a user friendly fashion to the console.
-def print_path(loc: Location):
+def print_path(loc: Location):  # O(n)
     path = []
     trace_path(loc, path)
     for i in range(len(path)):
