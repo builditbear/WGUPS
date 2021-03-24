@@ -288,6 +288,9 @@ class Truck:
                             and counter + len(transitive_dependencies) < load_cap):
                         for pkg in transitive_dependencies:  # O(n)
                             self.__load_pkg(pkg)
+                    else:
+                        for pkg in transitive_dependencies:
+                            next_load.append(pkg)
             # If the current_pkg bears no restrictions, simply load it and update our counter.
             else:
                 self.__load_pkg(current_pkg)
@@ -450,7 +453,7 @@ def deliver_packages(t: Truck, g: List[Location]):  # O(n^3)
 
 
 # The user interface outputs the total projected mileage of all trucks incurred by the end of the day.
-# It will also allow the user to request copmrehensive status reports or info on any package in the database
+# It will also allow the user to request comprehensive status reports or info on any package in the database
 # at any time during the day.
 def ui(pkg_db: PackageDB, t1: Truck, t2: Truck):  # O(n) - while loop execution time depends on n # of queries by user.
     user_in: str = ''
