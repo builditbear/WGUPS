@@ -591,8 +591,9 @@ def dijkstra_sp(g: list, start_loc_id, dest_id):  # O(n^2) - higher time complex
             if alt_path < loc.shortest_known_path:
                 loc.shortest_known_path = alt_path
                 loc.previous_location = current_loc
-    print("The shortest known path to " + g[dest_id].name + " from " + g[start_loc_id].name + " is "
-          + str(g[dest_id].shortest_known_path) + " miles.")
+    # Commented out logic here prints the shortest path to each location as it is calculated. Useful for testing.
+    # print("The shortest known path to " + g[dest_id].name + " from " + g[start_loc_id].name + " is "
+    #       + str(g[dest_id].shortest_known_path) + " miles.")
     print_path(g[dest_id])
 
 
