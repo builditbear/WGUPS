@@ -231,19 +231,24 @@ class Location:
 
 # Represents a WGUPS delivery truck in terms of its basic characteristics, package load, and linked package database.
 class Truck:
-    def __init__(self, pkg_db, truck_id, location: Location, avg_speed=18, capacity=16, mileage=0):  # O(1)
+    def __init__(self, pkg_db, truck_id, location: Location, avg_speed=18,
+                 capacity=16, mileage=0, dispatch_delay=0):  # O(1)
         self.truck_id = truck_id
         self.avg_speed = avg_speed
         self.capacity = capacity
         # In this scenario, WGUPS is so wealthy that their trucks are brand new - 0 mileage!
         self.mileage = mileage
+        # This field represents the time in minutes that a truck is delayed from loading and going out for delivery.
+        # It is meant to be used in the event that we want the truck to remain at the hub waiting for delayed packages.
+        self.dispatch_delay = dispatch_delay
         self.db: PackageDB = pkg_db
         self.delivery_list = []
         self.location: Location = location
 
-    # Calculates time of day for a given truck based on how far it has travelled at that point in time.
+    # Calculates time of day for a given truck based on how far it has travelled at that point in time, also
+    # accounting for a truck being dispatched later than the start of day to accommodate delayed packages.
     def current_time(self) -> datetime.datetime:  # O(1)
-        time_since_day_start = datetime.timedelta(hours=self.mileage / self.avg_speed)
+        time_since_day_start = datetime.timedelta(hours=self.mileage / self.avg_speed, minutes=self.dispatch_delay)
         return start_time_date + time_since_day_start
 
     # Need to update this once Dijkstra is working with logic for handling special notes & deadlines.
@@ -259,8 +264,7 @@ class Truck:
             p1 = re.compile('Can only be on truck')
             p2 = re.compile('Delayed on flight')
             p3 = re.compile('Wrong address listed')
-            p4 = re.compile('Must be delivered with')
-            if current_pkg.special_notes:
+            if current_pkg.special_notes or current_pkg.dependencies:
                 note: str = current_pkg.special_notes
                 # If this package has to be loaded onto a particular truck, only load if this is the right truck.
                 if p1.match(note):
@@ -281,13 +285,17 @@ class Truck:
                     else:
                         next_load.append(current_pkg)
                 # If the package had delivery dependencies, we need to deliver package along with all dependencies.
-                elif p4.match(note):
+                elif current_pkg.dependencies:
                     transitive_dependencies: List[Package] = []
                     discover_dependencies(current_pkg, self.db, transitive_dependencies)
                     if (len(self.delivery_list) + len(transitive_dependencies) <= self.capacity
                             and counter + len(transitive_dependencies) < load_cap):
                         for pkg in transitive_dependencies:  # O(n)
                             self.__load_pkg(pkg)
+                            # Ensure that dependent packages are not considered for loading after being loaded.
+                            if pkg is not current_pkg:
+                                manif.remove(pkg)
+                            counter += 1
                     else:
                         for pkg in transitive_dependencies:
                             next_load.append(pkg)
@@ -338,7 +346,11 @@ def main():  # O(n^4)
 
     print("Calculating delivery solution. Delivery simulation begins now.\n")
     t1 = Truck(db, 1, graph[0])
-    t2 = Truck(db, 2, graph[0])
+    # Truck 2's load and departure from the hub is delayed to allow delayed packages with deadlines to be loaded
+    # for delivery as soon as possible. To help facilitate timely delivery, Truck 2 also carries a smaller load to
+    # help counter the delivery algorithm prioritizing delivery to the *nearest* location - if more packages onboard
+    # are packages with deadlines, then it is more likely that the algorithm will select a package with a deadline.
+    t2 = Truck(db, 2, graph[0], dispatch_delay=65)
     flag = True
     # Alternates loading and delivering of trucks, and written in a way that prevents us from trying to load
     # a truck if all packages have been delivered.
@@ -348,7 +360,7 @@ def main():  # O(n^4)
             deliver_packages(t1, graph)
             flag = False
         else:
-            t2.load(manifest)
+            t2.load(manifest, load_cap=10)
             deliver_packages(t2, graph)
             flag = True
     print("\nDelivery solution for all packages devised.")
@@ -449,6 +461,8 @@ def deliver_packages(t: Truck, g: List[Location]):  # O(n^3)
     dijkstra_sp(g, t.location.loc_id, g[0].loc_id)  # O(n^2)
     # Note that g[0], the first location registered in our location graph, is assumed to be the hub.
     print("Truck #" + str(t.truck_id) + " returning to hub (" + g[0].name + ").")
+    t.location = g[0]
+    t.mileage += t.location.shortest_known_path
     print("Odometer: " + str(t.mileage))
 
 
