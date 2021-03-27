@@ -571,7 +571,7 @@ def discover_dependencies(pkg, pkg_db, transitive_dependencies):  # O(n^2)
 
 
 # Based on Dijkstra Shortest Path algorithm.
-def dijkstra_sp(g: list, start_loc_id, dest_id):  # O(n^2) - higher time complexity due to insertion sort (sort_by_dist)
+def dijkstra_sp(g: list, start_loc_id, dest_id):  # O(n^2)
     unvisited = []
     # Extract all locations from graph and enqueue to be visited, then sort by proximity to start location.
     for loc in g:  # O(n)
@@ -580,7 +580,7 @@ def dijkstra_sp(g: list, start_loc_id, dest_id):  # O(n^2) - higher time complex
     # start has 0 dist from itself, and will be the first location to be visited.
     g[start_loc_id].shortest_known_path = 0
     sort_by_dist_ascending(unvisited, g[start_loc_id])  # O(n^2)
-    while unvisited:  # O(n) - time complexity governed by number of locations in graph and destination.
+    while unvisited:  # O(n^2) - time complexity governed by number of locations in graph and destination.
         # Visit closest destination until we have reached the destination specified by dest_id.
         current_loc = unvisited.pop(0)
         if current_loc.loc_id == dest_id:
@@ -594,7 +594,7 @@ def dijkstra_sp(g: list, start_loc_id, dest_id):  # O(n^2) - higher time complex
     # Commented out logic here prints the shortest path to each location as it is calculated. Useful for testing.
     # print("The shortest known path to " + g[dest_id].name + " from " + g[start_loc_id].name + " is "
     #       + str(g[dest_id].shortest_known_path) + " miles.")
-    print_path(g[dest_id])
+    # print_path(g[dest_id])
 
 
 # Based on insertion sort algorithm.
